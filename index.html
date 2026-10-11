@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>GD Clone</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { width: min(100vw, 200vh); width: min(100dvw, 200dvh); height: auto; aspect-ratio: 2 / 1; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  #rot { display: none; position: fixed; top: 0; left: 0; right: 0; padding: 8px; text-align: center; font: 16px sans-serif; background: #ffd400; color: #000; z-index: 1; }
+  @media (orientation: portrait) { #rot { display: block; } }
+</style>
+</head>
+<body>
+<div id="rot">Bitte das Gerät ins Querformat drehen</div>
+<canvas id="c" width="800" height="400"></canvas>
+<script src="config.js"></script>
+<script src="levels.js"></script>
+<script src="patterns.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>GD Clone Editor</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font: 14px sans-serif; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 10px; }
+  #bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button { background: #3d5a9e; color: #fff; border: 2px solid #cfe0ff; padding: 6px 12px; cursor: pointer; font: inherit; }
+  button.sel { background: #ffd400; color: #000; border-color: #fff; }
+  canvas { width: 800px; max-width: 100%; border: 2px solid #3d5a9e; cursor: crosshair; }
+  #msg { min-height: 18px; color: #9f9; }
+  .sep { width: 12px; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="pal"></span>
+  <span class="sep"></span>
+  <button id="save">Speichern</button>
+  <button id="test">Testen</button>
+  <button id="testhere">Ab hier testen</button>
+  <select id="lvl"></select>
+  <button id="export">Exportieren</button>
+  <button id="share">Level teilen</button>
+  <button id="menu">Menü</button>
+</div>
+<canvas id="c" width="800" height="400"></canvas>
+<div id="bar2">
+  Musik: <input type="file" id="music" accept="audio/*">
+  <audio id="player" hidden></audio>
+</div>
+<div id="msg"></div>
+<div>Linksklick setzt, Rechtsklick löscht, Ziehen malt. Scrollen: Mausrad / Pfeiltasten.</div>
+<script src="config.js"></script>
+<script src="levels.js"></script>
+<script src="patterns.js"></script>
+<script src="editor.js"></script>
+</body>
+</html>
