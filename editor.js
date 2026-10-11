@@ -5,8 +5,8 @@ const msg = document.getElementById('msg');
 // Gruppen: [Titel, [[Zeichen, Beschriftung, Tooltip]]]
 const PALETTE = [
   ['Blöcke', [['#', '■', 'Block #'], ['^', '▲', 'Spike ^'], ['.', '⌫', 'Radierer']]],
-  ['Objekte', [['o', '▂', 'Jump-Pad o'], ['O', '●', 'Orb O'], ['|', '⚑', 'Ziel |']]],
-  ['Modus', [['S', 'S', 'Schiff-Portal S'], ['C', 'C', 'Würfel-Portal C'], ['U', '↑', 'Schwerkraft umkehren U'], ['N', '↓', 'Normale Schwerkraft N']]],
+  ['Objekte', [['o', '▂', 'Jump-Pad o'], ['O', '●', 'Orb O'], ['|', '⚑', 'Ziel |'], ['*', '◎', 'Münze * (max. 3)']]],
+  ['Modus', [['S', 'S', 'Schiff-Portal S'], ['C', 'C', 'Würfel-Portal C'], ['W', 'W', 'Wellen-Portal W'], ['U', '↑', 'Schwerkraft umkehren U'], ['N', '↓', 'Normale Schwerkraft N']]],
   ['Tempo', [['1', '1', 'Tempo 1,0× (1)'], ['2', '2', 'Tempo 1,2× (2)'], ['3', '3', 'Tempo 1,4× (3)'], ['4', '4', 'Tempo 1,7× (4)']]],
 ];
 let brush = '#', cam = 0;
@@ -78,6 +78,9 @@ function draw() {
         ctx.beginPath(); ctx.ellipse(x + T / 2, y + T / 2, 10, 1.5 * T, 0, 0, Math.PI * 2);
         ctx.fillStyle = col + '44'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.stroke(); ctx.lineWidth = 1;
         if (PORTALS[ch][1]) { ctx.fillStyle = col; ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(PORTALS[ch][1], x + T / 2, y + T / 2 + 7); }
+      } else if (ch === '*') {
+        ctx.beginPath(); ctx.arc(x + T / 2, y + T / 2, 12, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd400'; ctx.fill(); ctx.strokeStyle = '#a07800'; ctx.lineWidth = 3; ctx.stroke(); ctx.lineWidth = 1;
       } else if (ch === '|') {
         ctx.fillStyle = '#4f4'; ctx.fillRect(x + T / 2 - 3, y, 6, T);
       } else if (ch === '^') {
@@ -120,7 +123,9 @@ addEventListener('keydown', e => {
 let paintCh = null, strokeStart = null;
 function paint(e) {
   const cell = cellAt(e);
-  if (cell) grid[cell[1]][cell[0]] = paintCh;
+  if (!cell) return;
+  if (paintCh === '*' && grid[cell[1]][cell[0]] !== '*' && grid.flat().filter(ch => ch === '*').length >= MAX_COINS) { say('Maximal ' + MAX_COINS + ' Münzen pro Level.'); return; }
+  grid[cell[1]][cell[0]] = paintCh;
 }
 cv.addEventListener('contextmenu', e => e.preventDefault());
 cv.addEventListener('pointerdown', e => {

@@ -4,12 +4,13 @@ const CANVAS_W = 800, CANVAS_H = 400;
 const LEVEL_COLS = 70, LEVEL_ROWS = 10; // Standardgröße eines Levels (siehe levels.js)
 const START_COL = 3; // Spieler startet in dieser Spalte, eine Zeile über dem Boden
 const CUSTOM_KEY = 'customLevel'; // localStorage: Level als JSON-Array von Zeilen-Strings
-const TILE_TYPES = { '.': 'Leer', '#': 'Block', '^': 'Spike', 'o': 'Jump-Pad', 'O': 'Orb', '|': 'Ziel' };
+const TILE_TYPES = { '.': 'Leer', '#': 'Block', '^': 'Spike', 'o': 'Jump-Pad', 'O': 'Orb', '|': 'Ziel', '*': 'Münze' };
+const MAX_COINS = 3; // Münzen pro Level (Tile *)
 
-// Portale: Farbe + Symbol. S/C = Schiff/Würfel, U/N = Schwerkraft umgekehrt/normal, 1–4 = Tempostufen (SPEEDS × SPEED), > / < = Alias für 3 / 1
+// Portale: Farbe + Symbol. S/C/W = Schiff/Würfel/Welle, U/N = Schwerkraft umgekehrt/normal, 1–4 = Tempostufen (SPEEDS × SPEED), > / < = Alias für 3 / 1
 const SPEEDS = [1, 1.2, 1.4, 1.7];
 const SPEED_CH = { '1': 1, '2': 2, '3': 3, '4': 4, '<': 1, '>': 3 }; // Tile -> Stufe
-const PORTALS = { S: ['#ff4fd8', ''], C: ['#4fe8ff', ''], U: ['#b84fff', '↑'], N: ['#4fff9a', '↓'], '1': ['#6fa0ff', '1'], '2': ['#4fe86f', '2'], '3': ['#ffd23d', '3'], '4': ['#ff4f4f', '4'], '>': ['#ffd23d', '»'], '<': ['#6fa0ff', '«'] };
+const PORTALS = { S: ['#ff4fd8', ''], C: ['#4fe8ff', ''], W: ['#ff9a3d', 'W'], U: ['#b84fff', '↑'], N: ['#4fff9a', '↓'], '1': ['#6fa0ff', '1'], '2': ['#4fe86f', '2'], '3': ['#ffd23d', '3'], '4': ['#ff4f4f', '4'], '>': ['#ffd23d', '»'], '<': ['#6fa0ff', '«'] };
 const PPS = SPEED * 1000 / DT; // Pixel pro Sekunde bei Normaltempo
 
 // Position <-> Musikzeit. x = linke Kante des Spielers; Zeit 0 = Startposition (START_COL * TILE).

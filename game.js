@@ -1,10 +1,16 @@
 const T = TILE; // Konstanten (TILE, SPEED, GRAV, JUMP, DT) kommen aus config.js
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 let map, ROWS, COLS;
+let coinIdx = new Map(); // Münz-Tile ("c,r") -> Index 0..MAX_COINS-1 (Spaltenreihenfolge; weitere Münzen zählen nicht)
 const tile = (c, r) => map[r]?.[c] ?? '.';
-function setMap(m) { map = m; ROWS = m.length; COLS = Math.max(...m.map(r => r.length)); }
+function setMap(m) {
+  map = m; ROWS = m.length; COLS = Math.max(...m.map(r => r.length));
+  coinIdx = new Map();
+  for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) if (m[r][c] === '*' && coinIdx.size < MAX_COINS) coinIdx.set(c + ',' + r, coinIdx.size);
+}
 setMap(levelGrid(LEVELS[0]));
 
+const WAVE_BOX = 20; // Hitbox der Welle (px)
 const SHIP_ACC = 0.5, SHIP_MAX = 6.5, SHIP_CEIL = 10; // Schiff: Beschleunigung, max. Vertikaltempo, Decke (Tiles über Boden)
 let p, held = false, state = 'menu', attempt = 1, timer = 0, parts = [];
 let pressed = false; // Eingabe wurde seit dem letzten Tick neu gedrückt
@@ -24,10 +30,28 @@ function recordBest(pct) {
   if (!bestKey || practice || startX !== START_COL * T || pct <= getBest(bestKey)) return;
   try { localStorage.setItem('gdBest.' + bestKey, String(pct)); newRecord = true; } catch {}
 }
+// Münzen: pro Level gesammelte Indizes in localStorage; runCoins = in diesem Versuch eingesammelt (gespeichert erst beim Sieg, nicht im Übungsmodus)
+let runCoins = new Set(), savedCoins = new Set();
+const getCoins = key => { try { const v = JSON.parse(localStorage.getItem('gdCoins.' + key)); return Array.isArray(v) ? v.filter(i => i >= 0 && i < MAX_COINS) : []; } catch { return []; } };
+const totalCoins = () => LEVELS.reduce((n, _, i) => n + getCoins('L' + i).length, 0);
+const levelCoins = m => Math.min(MAX_COINS, levelGrid(m).join('').split('*').length - 1);
+const coinText = (key, total) => total ? '◎ ' + getCoins(key).length + '/' + total : '';
+function saveCoins() {
+  if (!bestKey || practice || !runCoins.size) return;
+  try { localStorage.setItem('gdCoins.' + bestKey, JSON.stringify([...new Set([...getCoins(bestKey), ...runCoins])])); } catch {}
+}
+function collectCoins() {
+  const b = p.wave ? WAVE_BOX : T, o = (T - b) / 2, cx = p.x + o + b / 2, cy = p.y + o + b / 2;
+  for (let r = Math.floor((p.y + o) / T); r <= Math.floor((p.y + o + b - 1e-6) / T); r++)
+    for (let c = Math.floor((p.x + o) / T); c <= Math.floor((p.x + o + b - 1e-6) / T); c++) {
+      const i = tile(c, r) === '*' ? coinIdx.get(c + ',' + r) : undefined;
+      if (i !== undefined && Math.abs(cx - (c * T + T / 2)) < b / 2 + 14 && Math.abs(cy - (r * T + T / 2)) < b / 2 + 14) runCoins.add(i);
+    }
+}
 const progressPct = () => Math.max(0, Math.min(100, Math.floor(p.x / (COLS * T) * 100)));
-function win() { state = 'won'; recordBest(100); }
+function win() { state = 'won'; recordBest(100); saveCoins(); savedCoins = new Set(bestKey ? getCoins(bestKey) : []); }
 function toggleMute() { unlockAudio(); muted = !muted; music.muted = deathSnd.muted = muted; }
-function setCheckpoint() { if (practice && state === 'play') cp = { p: { ...p }, orbs: new Set(usedOrbs) }; }
+function setCheckpoint() { if (practice && state === 'play') cp = { p: { ...p, trail: p.trail && [...p.trail] }, orbs: new Set(usedOrbs), coins: new Set(runCoins) }; }
 let startX = START_COL * T, startT = 0; // Startposition (px) und Musikstart (s)
 function playMusic() {
   if (!audioOn || practice) return;
@@ -59,10 +83,10 @@ function unlockAudio() {
   if (state === 'play') playMusic();
 }
 function reset() {
-  if (practice && cp) { p = { ...cp.p }; usedOrbs = new Set(cp.orbs); }
+  if (practice && cp) { p = { ...cp.p, trail: cp.p.trail && [...cp.p.trail] }; usedOrbs = new Set(cp.orbs); runCoins = new Set(cp.coins); }
   else {
     p = { x: startX, y: (ROWS - 2) * T, vy: 0, ground: true, rot: 0, target: 0, ship: false, grav: startGrav(), spd: speedAtX(map, startX) };
-    usedOrbs = new Set();
+    usedOrbs = new Set(); runCoins = new Set();
   }
   state = 'play'; parts = []; pressed = false; newRecord = false;
   inputLocked = down.size > 0;
@@ -80,21 +104,43 @@ function die() {
   }
 }
 
-// AABB-Test gegen alle Tiles des Typs ch; spike nutzt verkleinerte Hitbox
+// AABB-Test gegen alle Tiles des Typs ch; spike nutzt verkleinerte Hitbox, die Welle eine kleinere Spieler-Box
 function hits(ch) {
   const inset = ch === '^' ? [12, 14, 12, 0] : ch === 'o' ? [0, 30, 0, 0] : [0, 0, 0, 0]; // l, t, r, b
-  for (let r = Math.floor(p.y / T); r <= Math.floor((p.y + T - 1e-6) / T); r++)
-    for (let c = Math.floor(p.x / T); c <= Math.floor((p.x + T - 1e-6) / T); c++) {
+  const sz = p.wave ? WAVE_BOX : T, o = (T - sz) / 2, px = p.x + o, py = p.y + o;
+  for (let r = Math.floor(py / T); r <= Math.floor((py + sz - 1e-6) / T); r++)
+    for (let c = Math.floor(px / T); c <= Math.floor((px + sz - 1e-6) / T); c++) {
       if (tile(c, r) !== ch) continue;
-      const l = c * T + inset[0], t = r * T + inset[1], rr = (c + 1) * T - inset[2], b = (r + 1) * T - inset[3];
-      if (p.x < rr && p.x + T > l && p.y < b && p.y + T > t) return true;
+      const l = c * T + inset[0], t = r * T + inset[1], rr = (c + 1) * T - inset[2], bt = (r + 1) * T - inset[3];
+      if (px < rr && px + sz > l && py < bt && py + sz > t) return true;
     }
   return false;
 }
 
-// Menü: 'menu' (Hauptmenü) und 'levels' (Levelauswahl); Buttons werden bei Bedarf neu aufgebaut
+// Icons: 8 Farben + 4 Gesichter; need = Münzen (Summe über alle Levels), ab denen freigeschaltet
+const ICON_COLORS = ['#ffd400', '#ff4f4f', '#4fe86f', '#4fe8ff', '#b84fff', '#ff9a3d', '#ff4fd8', '#ffffff'], COLOR_NEED = [0, 0, 0, 0, 1, 1, 2, 3];
+const FACE_NEED = [0, 1, 2, 3];
+let icon = { c: 0, f: 0 };
+try {
+  const v = JSON.parse(localStorage.getItem('gdIcon'));
+  if (v && ICON_COLORS[v.c] && FACE_NEED[v.f] !== undefined) icon = { c: v.c, f: v.f };
+} catch {}
+function drawFace(f, x0, y0, s) { // Gesicht im Quadrat (x0, y0, Seite s), schwarz
+  const ex = [x0 + 0.25 * s, x0 + 0.55 * s], ey = y0 + (f === 2 ? 0.3 : 0.25) * s, es = 0.2 * s;
+  ctx.fillStyle = ctx.strokeStyle = '#000'; ctx.lineWidth = Math.max(2, s / 14);
+  if (f === 3) { // Sonnenbrille
+    ctx.fillRect(x0 + 0.15 * s, y0 + 0.22 * s, 0.7 * s, 0.24 * s);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x0 + 0.2 * s, y0 + 0.25 * s, 0.1 * s, 0.06 * s); ctx.fillStyle = '#000';
+  } else for (const x of ex) ctx.fillRect(x, ey, es, es);
+  ctx.beginPath();
+  if (f === 1 || f === 3) ctx.arc(x0 + 0.5 * s, y0 + 0.52 * s, 0.2 * s, 0.15 * Math.PI, 0.85 * Math.PI);
+  if (f === 2) { ctx.moveTo(x0 + 0.2 * s, y0 + 0.14 * s); ctx.lineTo(x0 + 0.48 * s, y0 + 0.26 * s); ctx.moveTo(x0 + 0.8 * s, y0 + 0.14 * s); ctx.lineTo(x0 + 0.52 * s, y0 + 0.26 * s); ctx.moveTo(x0 + 0.3 * s, y0 + 0.78 * s); ctx.lineTo(x0 + 0.7 * s, y0 + 0.78 * s); }
+  ctx.stroke(); ctx.lineWidth = 1;
+}
+
+// Menü: 'menu' (Hauptmenü), 'levels' (Levelauswahl), 'icons' (Icon-Menü); Buttons werden bei Bedarf neu aufgebaut
 let buttons = [];
-const inMenu = () => state === 'menu' || state === 'levels';
+const inMenu = () => state === 'menu' || state === 'levels' || state === 'icons';
 function loadCustom() { // gültiges Level aus localStorage oder null
   try {
     const raw = localStorage.getItem(CUSTOM_KEY);
@@ -109,7 +155,7 @@ function startLevel(m, x, key) { // x: optionale Start-x-Position (Musikzeit = t
   const track = m.music || 'audio/music.mp3';
   if (!music.src.endsWith(track)) music.src = track;
   startX = x ?? START_COL * T; startT = Math.max(0, timeAtX(m, startX));
-  setMap(m); attempt = 1; cp = null; bestKey = key || null; reset();
+  setMap(m); attempt = 1; cp = null; bestKey = key || null; savedCoins = new Set(bestKey ? getCoins(bestKey) : []); reset();
 }
 function goMenu() {
   state = 'menu'; cp = null; down.clear(); held = false; inputLocked = false; parts = [];
@@ -118,19 +164,28 @@ function goMenu() {
   buttons = [
     { label: 'Spielen', x: bx, y: 105, w: bw, h: 42, fn: goLevels },
     { label: 'Editor', x: bx, y: 155, w: bw, h: 42, fn: () => { location.href = 'editor.html'; } },
+    { label: 'Icon', x: 690, y: 18, w: 92, h: 40, fn: goIcons },
   ];
   const custom = loadCustom();
-  if (custom) buttons.push({ label: 'Eigenes Level', sub: bestText('custom'), x: bx, y: 205, w: bw, h: 42, fn: () => startLevel(custom, undefined, 'custom') });
+  if (custom) buttons.push({ label: 'Eigenes Level', sub: [bestText('custom'), coinText('custom', levelCoins(custom))].filter(Boolean).join('   '), x: bx, y: 205, w: bw, h: 42, fn: () => startLevel(custom, undefined, 'custom') });
   buttons.push({ label: 'Übungsmodus: ' + (practice ? 'An' : 'Aus'), x: bx, y: custom ? 255 : 205, w: bw, h: 42, fn: () => { practice = !practice; goMenu(); } });
 }
 const bestText = key => getBest(key) ? 'Best: ' + getBest(key) + '%' : '';
+function goIcons() {
+  state = 'icons';
+  const total = totalCoins(), save = () => { try { localStorage.setItem('gdIcon', JSON.stringify(icon)); } catch {} goIcons(); };
+  const lock = (b, need) => { if (total < need) { b.locked = need; b.fn = () => {}; } return b; };
+  buttons = ICON_COLORS.map((col, i) => lock({ x: 134 + i * 68, y: 150, w: 56, h: 56, col, sel: icon.c === i, fn: () => { icon.c = i; save(); } }, COLOR_NEED[i]));
+  FACE_NEED.forEach((need, i) => buttons.push(lock({ x: 204 + i * 104, y: 240, w: 80, h: 80, face: i, col: ICON_COLORS[icon.c], sel: icon.f === i, fn: () => { icon.f = i; save(); } }, need)));
+  buttons.push({ label: 'Zurück', x: (cv.width - 240) / 2, y: 352, w: 240, h: 38, fn: goMenu });
+}
 function goLevels() {
   state = 'levels';
   const bw = 240, gap = 16, per = 2;
   buttons = LEVELS.map((m, i) => {
     const secs = m.sections, d = secs?.length ? Math.max(1, Math.min(5, Math.round(secs.reduce((a, s) => a + (s.difficulty || 1), 0) / secs.length))) : 0;
     return {
-      label: m.name || 'Level ' + (i + 1), stars: d, sub: bestText('L' + i),
+      label: m.name || 'Level ' + (i + 1), stars: d, sub: [bestText('L' + i), coinText('L' + i, levelCoins(m))].filter(Boolean).join('   '),
       x: (cv.width - (Math.min(per, LEVELS.length - Math.floor(i / per) * per) * (bw + gap) - gap)) / 2 + (i % per) * (bw + gap),
       y: 135 + Math.floor(i / per) * 56, w: bw, h: 48, fn: () => startLevel(m, undefined, 'L' + i),
     };
@@ -150,8 +205,19 @@ function drawMenu() {
   ctx.fillStyle = '#ffd400'; ctx.textAlign = 'center';
   ctx.font = 'bold 56px sans-serif'; ctx.fillText('GD Clone', cv.width / 2, 90);
   if (state === 'levels') { ctx.fillStyle = '#fff'; ctx.font = '22px sans-serif'; ctx.fillText('Level wählen', cv.width / 2, 125); }
+  if (state === 'icons') {
+    ctx.fillStyle = '#fff'; ctx.font = '22px sans-serif'; ctx.fillText('Icon wählen   ◎ ' + totalCoins(), cv.width / 2, 125);
+    ctx.font = '13px sans-serif'; ctx.fillStyle = '#cfe0ff'; ctx.fillText('Gesperrte Icons werden mit Münzen freigeschaltet', cv.width / 2, 230);
+  }
   ctx.font = '22px sans-serif';
   for (const b of buttons) {
+    if (b.col) { // Icon-Button: Farbfeld oder Gesicht
+      ctx.fillStyle = b.locked ? '#222' : b.col; ctx.fillRect(b.x, b.y, b.w, b.h);
+      if (b.face !== undefined && !b.locked) drawFace(b.face, b.x, b.y, b.w);
+      ctx.strokeStyle = b.sel ? '#ffd400' : '#cfe0ff'; ctx.lineWidth = b.sel ? 4 : 2; ctx.strokeRect(b.x, b.y, b.w, b.h); ctx.lineWidth = 1;
+      if (b.locked) { ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.fillText('◎ ' + b.locked, b.x + b.w / 2, b.y + b.h / 2 + 6); ctx.font = '22px sans-serif'; }
+      continue;
+    }
     ctx.fillStyle = '#3d5a9e'; ctx.fillRect(b.x, b.y, b.w, b.h);
     ctx.strokeStyle = '#cfe0ff'; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h); ctx.lineWidth = 1;
     ctx.fillStyle = '#fff';
@@ -211,7 +277,31 @@ function updateShip() {
   p.x += SPEED * p.spd; // Y liegt jetzt bündig → jede Blockberührung ist seitlich
   if (hits('|')) { win(); return; }
   if (hits('#') || hits('^')) return die();
+  collectCoins();
+  if (inPortal('W')) { enterWave(); return; }
   if (inPortal('C')) { p.ship = false; p.rot = p.target = 0; }
+  applyPortals();
+  if (p.x > COLS * T) { cp = null; reset(); }
+}
+
+// Welle: Eingabe gehalten = 45° nach oben, sonst 45° nach unten; jede Berührung von Block oder Spike tötet (Decke begrenzt nur)
+function enterWave() {
+  p.wave = true; p.ship = false; p.trail = []; p.grace = p.ground ? 12 : 0; p.ground = false; p.vy = 0; // grace: kurzer Steigflug, wenn vom Boden aus eingetreten
+}
+function updateWave() {
+  const v = SPEED * p.spd, up = p.grace > 0 || (held && !inputLocked);
+  if (p.grace > 0) p.grace--;
+  p.vy = up ? -v : v;
+  p.x += v; p.y += p.vy; p.ground = false;
+  const top = (ROWS - 1 - SHIP_CEIL) * T;
+  if (p.y < top) p.y = top;
+  p.rot = p.target = up ? -Math.PI / 4 : Math.PI / 4;
+  if (hits('|')) { win(); return; }
+  if (hits('#') || hits('^') || p.y > ROWS * T) return die();
+  p.trail.push({ x: p.x + T / 2, y: p.y + T / 2 }); if (p.trail.length > 90) p.trail.shift();
+  collectCoins();
+  if (inPortal('C')) { p.wave = false; p.vy = 0; p.rot = p.target = 0; }
+  else if (inPortal('S')) { p.wave = false; p.ship = true; p.vy = 0; }
   applyPortals();
   if (p.x > COLS * T) { cp = null; reset(); }
 }
@@ -223,6 +313,7 @@ function update() {
     if (--timer <= 0) { attempt++; reset(); }
     return;
   }
+  if (p.wave) { pressed = false; return updateWave(); }
   if (p.ship) { pressed = false; return updateShip(); }
   if (held && !inputLocked && p.ground) { p.vy = JUMP * p.grav; p.ground = false; p.target += p.grav * Math.PI / 2; }
   else if (pressed && !inputLocked && !p.ground) { // Orb: nur bei neuem Tastendruck, einmal pro Versuch
@@ -243,6 +334,7 @@ function update() {
   if (hits('|')) { win(); return; }
   if (hits('#') || hits('^')) return die();
   applyPortals();
+  if (inPortal('W')) { enterWave(); return; }
   if (inPortal('S')) { p.ship = true; p.ground = false; p.vy = Math.max(-SHIP_MAX, Math.min(SHIP_MAX, p.vy)); }
   // Y: fallend landen, steigend gegen Decke = Tod
   p.vy += GRAV * p.grav; p.y += p.vy; p.ground = false;
@@ -255,6 +347,7 @@ function update() {
   }
   if (hits('^') || (p.grav > 0 && p.y > ROWS * T)) return die();
   if (!p.ground) p.rot += (p.target - p.rot) * 0.12;
+  collectCoins();
   if (p.x > COLS * T) { cp = null; reset(); } // Ziel erreicht → von vorn
 }
 
@@ -291,7 +384,7 @@ function draw() {
         fx.push({ x: p.x + T / 2, y: p.grav > 0 ? p.y + T : p.y, vx: (Math.random() - 0.7) * 3, vy: -Math.random() * 1.5, life: 1, size: 3 + Math.random() * 3, dust: true });
     }
     prevGround = p.ground;
-    fx.push({ x: p.x + 4, y: p.y + T / 2 + (Math.random() - 0.5) * T * 0.6, vx: 0, vy: 0, life: 1, size: 10, hue: hue + 150 });
+    if (!p.wave) fx.push({ x: p.x + 4, y: p.y + T / 2 + (Math.random() - 0.5) * T * 0.6, vx: 0, vy: 0, life: 1, size: 10, hue: hue + 150 });
   }
   squash = Math.max(0, squash - 0.08 * k);
   for (const q of fx) { q.x += q.vx * k; q.y += q.vy * k; q.life -= (q.dust ? 0.04 : 0.06) * k; }
@@ -328,6 +421,15 @@ function draw() {
         ctx.fillStyle = '#ffe600'; ctx.shadowColor = '#ffe600'; ctx.shadowBlur = 14 + 14 * bass; ctx.fill(); ctx.shadowBlur = 0;
         ctx.strokeStyle = '#fff6a0'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x + T / 2, y + T / 2, 16 * s, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1;
       }
+      else if (ch === '*') {
+        const i = coinIdx.get(c + ',' + r);
+        if (i === undefined || runCoins.has(i)) continue;
+        const w = 12 * Math.abs(Math.cos(performance.now() / 250 + c)) + 2;
+        ctx.globalAlpha = savedCoins.has(i) ? 0.45 : 1;
+        ctx.beginPath(); ctx.ellipse(x + T / 2, y + T / 2, w, 13, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffd400'; ctx.shadowColor = '#ffd400'; ctx.shadowBlur = 8 + 8 * bass; ctx.fill(); ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#a07800'; ctx.lineWidth = 3; ctx.stroke(); ctx.lineWidth = 1; ctx.globalAlpha = 1;
+      }
       else if (ch === '|') { ctx.fillStyle = '#4f4'; ctx.fillRect(x + T / 2 - 3, y, 6, T); }
       else if (PORTALS[ch]) { // Portal: hohes, schmales, leuchtendes Oval (~3 Tiles)
         const col = PORTALS[ch][0], pulse = 1 + 0.08 * Math.sin(performance.now() / 150) + 0.15 * bass;
@@ -349,8 +451,14 @@ function draw() {
     ctx.fillRect(q.x - cam - sz / 2, q.y - sz / 2, sz, sz);
   }
   ctx.globalAlpha = 1;
+  const ic = ICON_COLORS[icon.c];
+  if (p.wave && p.trail.length > 1 && state !== 'dead') { // Wellen-Spur als Linie
+    ctx.strokeStyle = ic; ctx.lineWidth = 5; ctx.lineJoin = 'round'; ctx.globalAlpha = 0.85;
+    ctx.beginPath(); p.trail.forEach((q, i) => i ? ctx.lineTo(q.x - cam, q.y) : ctx.moveTo(q.x - cam, q.y));
+    ctx.lineTo(p.x + T / 2 - cam, p.y + T / 2); ctx.stroke(); ctx.lineWidth = 1; ctx.globalAlpha = 1;
+  }
   if (state === 'dead') {
-    ctx.fillStyle = '#ffd400';
+    ctx.fillStyle = ic;
     for (const q of parts) ctx.fillRect(q.x - cam - 3, q.y - 3, 6, 6);
   } else {
     ctx.save(); // Spieler, um Mittelpunkt rotiert; Squash beim Landen (Unterkante bleibt am Boden)
@@ -358,19 +466,21 @@ function draw() {
     const sq = 0.25 * squash * squash;
     ctx.translate(0, T / 2 * sq * p.grav); ctx.scale(1 + sq, 1 - sq);
     ctx.rotate(p.rot); ctx.scale(1, p.grav);
-    ctx.shadowColor = '#ffd400'; ctx.shadowBlur = 16;
-    if (p.ship) { // Schiff: kleiner Würfel auf flachem Rumpf
+    ctx.shadowColor = ic; ctx.shadowBlur = 16;
+    if (p.wave) { // Welle: Pfeil in Flugrichtung
+      ctx.beginPath(); ctx.moveTo(-13, -13); ctx.lineTo(15, 0); ctx.lineTo(-13, 13); ctx.closePath();
+      ctx.fillStyle = ic; ctx.fill(); ctx.shadowBlur = 0; ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke(); ctx.lineWidth = 1;
+    } else if (p.ship) { // Schiff: kleiner Würfel auf flachem Rumpf
       ctx.fillStyle = '#ff4fd8'; ctx.fillRect(-T / 2, 2, T, 12);
-      ctx.fillStyle = '#ffd400'; ctx.fillRect(-12, -14, 24, 24);
+      ctx.fillStyle = ic; ctx.fillRect(-12, -14, 24, 24);
       ctx.shadowBlur = 0;
       ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.strokeRect(-12, -14, 24, 24); ctx.strokeRect(-T / 2, 2, T, 12); ctx.lineWidth = 1;
-      ctx.fillStyle = '#000'; ctx.fillRect(-7, -9, 5, 5); ctx.fillRect(2, -9, 5, 5);
+      drawFace(icon.f, -12, -14, 24);
     } else {
-    ctx.fillStyle = '#ffd400'; ctx.fillRect(-T / 2, -T / 2, T, T);
+    ctx.fillStyle = ic; ctx.fillRect(-T / 2, -T / 2, T, T);
     ctx.shadowBlur = 0;
     ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.strokeRect(-T / 2 + 1, -T / 2 + 1, T - 2, T - 2); ctx.lineWidth = 1;
-    ctx.fillStyle = '#000'; ctx.fillRect(-T / 2 + 10, -T / 2 + 10, 8, 8);
-    ctx.fillRect(T / 2 - 18, -T / 2 + 10, 8, 8);
+    drawFace(icon.f, -T / 2, -T / 2, T);
     }
     ctx.restore();
   }
@@ -393,6 +503,7 @@ function draw() {
   ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('Versuch ' + attempt, 10, 20);
   if (practice) { ctx.fillStyle = '#4fe8ff'; ctx.fillText('Übungsmodus', 10, 40); }
+  if (coinIdx.size) { ctx.fillStyle = '#ffd400'; ctx.fillText('◎ ' + runCoins.size + '/' + coinIdx.size, 10, practice ? 60 : 40); }
   if (state === 'dead') { // erreichter Prozentwert groß, blendet in den letzten Ticks aus
     ctx.globalAlpha = Math.min(1, timer / 10); ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 96px sans-serif';
     ctx.shadowColor = '#000'; ctx.shadowBlur = 8; ctx.fillText(deathPct + '%', cv.width / 2, 240); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
@@ -413,7 +524,7 @@ function draw() {
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
     ctx.font = '40px sans-serif'; ctx.fillText('Level geschafft!', cv.width / 2, 170);
     ctx.font = '20px sans-serif';
-    ctx.fillText('Versuche: ' + attempt, cv.width / 2, 210);
+    ctx.fillText('Versuche: ' + attempt + (coinIdx.size ? '   ◎ ' + runCoins.size + '/' + coinIdx.size + (practice ? ' (Übung: nicht gespeichert)' : '') : ''), cv.width / 2, 210);
     ctx.fillText('Leertaste zum Neustart', cv.width / 2, 245);
   }
 }
@@ -474,7 +585,7 @@ async function unpackLevel(code) {
     let u8 = Uint8Array.from(atob(code.slice(1).replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
     if (code[0] === 'z') u8 = new Uint8Array(await new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
     const rows = new TextDecoder().decode(u8).split('\n');
-    return rows.length >= 2 && rows.length <= 30 && rows.every(r => r.length <= 500 && /^[.#^oO|SCUN1-4<>]*$/.test(r)) ? rows : null;
+    return rows.length >= 2 && rows.length <= 30 && rows.every(r => r.length <= 500 && /^[.#^oO|SCUNW*1-4<>]*$/.test(r)) ? rows : null;
   } catch { return null; }
 }
 const lh = location.hash.match(/^#level=([zr][A-Za-z0-9_-]+)$/);

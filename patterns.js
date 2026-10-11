@@ -1,5 +1,5 @@
 // Handgemachte Muster + Level-Rezepte (von index.html und editor.html geladen, nach config.js).
-// Rezept: { name, music, bpm, offset (ms), seed, sections: [{ mode: 'cube'|'ship'|'gravity', bars, difficulty (1–5), speed (1–4, optional) }] }
+// Rezept: { name, music, bpm, offset (ms), seed, sections: [{ mode: 'cube'|'ship'|'gravity'|'wave', bars, difficulty (1–5), speed (1–4, optional) }] }
 // levelGrid(level) liefert für Rezepte das erzeugte Grid (Zeilen-Strings mit Zusatzfeldern name/music/bpm/offset), für alte Grid-Level das Array selbst.
 // Spielbarkeit: alle Maße (Sprungweiten, Lücken, Abstände, Schiff-Wendezeiten) werden aus GRAV, JUMP, PAD_MULT, SPEED, SPEEDS und den Schiff-Konstanten berechnet.
 // Bekannte Grenze: das Schiff darf über Zeile 0 hinausfliegen (siehe SHIP_CEIL in game.js), Tunneldecken lassen sich dort überfliegen.
@@ -257,6 +257,19 @@ const shipNarrow = B => { // enge Schlucht (3 Kacheln), sanftes Weben
   return lay(B, [free(leg(B, 200)), ...st.map(([t, b]) => ({ t, b, n }))]);
 };
 
+// ---- Welle: 45°-Flug (Steigung 1) → Tunnel mit Diagonalen (n = 1 Spalte je Stufe), Tore mit Abstand ≥ Höhendifferenz + Reserve ----
+const waveStep = (G, tops) => B => lay(B, [free(10), ...tops.map(t => ({ t, b: t + G, n: 1 }))]);
+const waveGates = B => { // Tore (Lücke 4 Kacheln) auf wechselnder Höhe, dazwischen offener Raum
+  const sh = B.d <= 4 ? 1 : 2, m = 6 + sh, list = [free(10)];
+  for (let i = 0; i < 4 + (B.d >= 5 ? 2 : 0); i++) list.push({ t: 1 + (i % 2) * sh, b: 5 + (i % 2) * sh, n: 1 }, free(m));
+  return lay(B, list);
+};
+const waveSpikes = B => { // breiter Korridor mit Spikes an Decke und Boden
+  const G = B.d >= 5 ? 6 : 7, list = [free(10)];
+  for (let i = 0; i < 3 + B.d; i++) { const t = 1 + i % 2; list.push({ t, b: t + G, n: 6, sp: true }); }
+  return lay(B, list);
+};
+
 const PATTERNS = [
   { id: 'spike1', name: 'Einzelspike', mode: 'cube', diff: 1, build: spikeGroup(1) },
   { id: 'spike2', name: 'Doppelspike', mode: 'cube', diff: 1, build: spikeGroup(2) },
@@ -276,6 +289,11 @@ const PATTERNS = [
   { id: 'shipPillars', name: 'Schiff durch Block-Säulen', mode: 'ship', diff: 3, build: shipPillars },
   { id: 'shipSpikes', name: 'Schiff mit Spikes an Decke und Boden', mode: 'ship', diff: 3, build: shipSpikes },
   { id: 'shipNarrow', name: 'Schiff: enge Schlucht', mode: 'ship', diff: 5, build: shipNarrow },
+  { id: 'waveRamp', name: 'Welle: flache Rampe', mode: 'wave', diff: 1, build: waveStep(6, [3, 2, 1, 0, 1, 2, 3]) },
+  { id: 'waveStairs', name: 'Welle: Diagonaltunnel', mode: 'wave', diff: 2, build: waveStep(5, [4, 3, 2, 1, 0, 1, 2, 3, 4]) },
+  { id: 'waveZigzag', name: 'Welle: Zickzack', mode: 'wave', diff: 3, build: waveStep(5, [4, 3, 2, 3, 4, 3, 2, 3, 4, 3, 2, 3, 4]) },
+  { id: 'waveGates', name: 'Welle: Tore', mode: 'wave', diff: 4, build: waveGates },
+  { id: 'waveSpikes', name: 'Welle mit Spikes an Decke und Boden', mode: 'wave', diff: 5, build: waveSpikes },
   { id: 'ceilSpike', name: 'Decken-Spike', mode: 'gravity', diff: 1, build: spikeGroup(1) },
   { id: 'ceilDouble', name: 'Decken-Doppelspike', mode: 'gravity', diff: 2, build: spikeGroup(2) },
   { id: 'ceilStairs', name: 'Deckentreppe mit Spike', mode: 'gravity', diff: 2, build: stairs(2, 1) },
@@ -288,7 +306,8 @@ const PATTERNS = [
 ];
 
 // ---- Rezept -> Grid ----
-const MODES = { cube: 'cube', wuerfel: 'cube', 'würfel': 'cube', ship: 'ship', schiff: 'ship', gravity: 'gravity', grav: 'gravity', schwerkraft: 'gravity' };
+const MODES = { cube: 'cube', wuerfel: 'cube', 'würfel': 'cube', ship: 'ship', schiff: 'ship', gravity: 'gravity', grav: 'gravity', schwerkraft: 'gravity', wave: 'wave', welle: 'wave' };
+const shape = m => m === 'ship' || m === 'wave' ? m : 'cube'; // Portal-Art: S / W / C (Schwerkraft läuft über U/N)
 const normMode = m => MODES[String(m).toLowerCase()] || 'cube';
 
 // Musikzeit (s), zu der der erste Abschnitt beginnt: erster Taktanfang mit genug Anlauf vor dem ersten Hindernis
@@ -302,7 +321,7 @@ function recipeStart(bpm, offsetMs) {
 const fallCols = (h, v) => cols(airTicks(h, 0) * v) + 2;
 function runway(prev, s) { // freie Spalten hinter dem Portal, damit der Spieler landen/reagieren kann
   const v = SPEED * s.spd;
-  if (s.mode === 'ship') return 1; // Ausrichten übernimmt der Tunnel-Anlauf
+  if (s.mode === 'ship' || s.mode === 'wave') return 1; // Ausrichten übernimmt der Tunnel-Anlauf
   if (s.mode !== prev.mode) return fallCols(s.mode === 'gravity' || prev.mode === 'gravity' ? 280 : 360, v);
   return s.lvl !== prev.lvl ? cols(airTicks(0, JUMP) * v) + 1 : 0; // Tempowechsel im Sprung verlängert die Flugbahn
 }
@@ -324,13 +343,13 @@ function buildLevel(rec) {
   const g = Array.from({ length: LEVEL_ROWS }, () => Array(goal + 6).fill('.'));
   g[F].fill('#');
   for (let r = 0; r < F; r++) g[r][goal] = '|';
-  if (last.mode === 'ship') g[4][last.end] = 'C'; // vor dem Ziel wieder Würfel / normale Schwerkraft
+  if (last.mode === 'ship' || last.mode === 'wave') g[4][last.end] = 'C'; // vor dem Ziel wieder Würfel / normale Schwerkraft
   if (last.mode === 'gravity') g[3][last.end] = 'N';
 
   let nPat = 0;
   secs.forEach((s, i) => {
     const prev = i ? secs[i - 1] : { mode: 'cube', lvl: 1 };
-    if ((s.mode === 'ship') !== (prev.mode === 'ship')) g[4][s.cp] = s.mode === 'ship' ? 'S' : 'C';
+    if (shape(s.mode) !== shape(prev.mode)) g[4][s.cp] = { ship: 'S', wave: 'W', cube: 'C' }[shape(s.mode)];
     if (s.lvl !== prev.lvl) g[5][s.cp] = String(s.lvl);
     if ((s.mode === 'gravity') !== (prev.mode === 'gravity')) g[3][s.cp] = s.mode === 'gravity' ? 'U' : 'N';
     if (s.mode === 'gravity') for (let c = s.cp; c < s.end; c++) g[0][c] = '#';
@@ -353,7 +372,7 @@ function buildLevel(rec) {
         else { B.undo(); w = 0; }
       }
       if (!w) break;
-      c = cs + w + (s.mode === 'ship' ? 0 : Math.max(1, Math.round((6.5 - s.d) * (0.7 + 0.6 * rnd()) * s.spd)));
+      c = cs + w + (s.mode === 'ship' || s.mode === 'wave' ? 0 : Math.max(1, Math.round((6.5 - s.d) * (0.7 + 0.6 * rnd()) * s.spd)));
     }
   });
 
