@@ -1,10 +1,11 @@
 const T = TILE; // Konstanten (TILE, SPEED, GRAV, JUMP, DT) kommen aus config.js
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 let map, ROWS, COLS;
+let colOff = 0; // Endlos: Anzahl verworfener Spalten links (Spaltennummern bleiben absolut)
 let coinIdx = new Map(); // Münz-Tile ("c,r") -> Index 0..MAX_COINS-1 (Spaltenreihenfolge; weitere Münzen zählen nicht)
-const tile = (c, r) => map[r]?.[c] ?? '.';
+const tile = (c, r) => map[r]?.[c - colOff] ?? '.';
 function setMap(m) {
-  map = m; ROWS = m.length; COLS = Math.max(...m.map(r => r.length));
+  map = m; colOff = 0; ROWS = m.length; COLS = Math.max(...m.map(r => r.length));
   coinIdx = new Map();
   for (let c = 0; c < COLS; c++) for (let r = 0; r < ROWS; r++) if (m[r][c] === '*' && coinIdx.size < MAX_COINS) coinIdx.set(c + ',' + r, coinIdx.size);
 }
@@ -48,10 +49,47 @@ function collectCoins() {
       if (i !== undefined && Math.abs(cx - (c * T + T / 2)) < b / 2 + 14 && Math.abs(cy - (r * T + T / 2)) < b / 2 + 14) runCoins.add(i);
     }
 }
+// Kleine Hinweis-Einblendung (unten mittig)
+let toastMsg = '', toastUntil = 0;
+function toast(msg) { toastMsg = msg; toastUntil = performance.now() + 2200; }
+function drawToast() {
+  const left = toastUntil - performance.now();
+  if (!toastMsg || left <= 0) return;
+  ctx.save(); ctx.globalAlpha = Math.min(1, left / 300); ctx.font = '16px sans-serif'; ctx.textAlign = 'center';
+  const w = ctx.measureText(toastMsg).width + 32, x = (cv.width - w) / 2;
+  ctx.fillStyle = '#000d'; ctx.fillRect(x, 352, w, 32); ctx.strokeStyle = '#cfe0ff'; ctx.strokeRect(x, 352, w, 32);
+  ctx.fillStyle = '#fff'; ctx.fillText(toastMsg, cv.width / 2, 373);
+  ctx.restore();
+}
+async function copyText(text, okMsg) {
+  try { await navigator.clipboard.writeText(text); return toast(okMsg); } catch {}
+  try { // Fallback ohne Clipboard-API
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove();
+    toast(ok ? okMsg : 'Kopieren fehlgeschlagen');
+  } catch { toast('Kopieren fehlgeschlagen'); }
+}
+// Laufzeit des aktuellen Versuchs (Ticks), Endlos-Bestzeit (s), Ergebnis-Text
+let runTicks = 0, deathSec = 0, winTime = 0, levelName = 'Level';
+const runSec = () => runTicks * DT / 1000;
+const fmtSec = s => s.toFixed(1) + ' s';
+const fmtTime = s => Math.floor(s / 60) + ':' + (s % 60).toFixed(1).padStart(4, '0');
+const getBestT = () => { try { return +localStorage.getItem('gdBestT.endless') || 0; } catch { return 0; } };
+function recordTime(sec) {
+  sec = Math.floor(sec * 10) / 10;
+  if (sec <= getBestT()) return;
+  try { localStorage.setItem('gdBestT.endless', String(sec)); newRecord = true; } catch {}
+}
+function resultText() {
+  const n = coinIdx.size, coins = Array.from({ length: n }, (_, i) => runCoins.has(i) ? '🪙' : '⚫').join('');
+  return levelName + ' geschafft! 🎉\nVersuche: ' + attempt + '  ·  Zeit: ' + fmtTime(winTime) + (n ? '\nMünzen: ' + coins : '') + (practice ? '\n(Übungsmodus)' : '');
+}
+const copyResult = () => copyText(resultText(), 'Ergebnis in die Zwischenablage kopiert');
 const progressPct = () => Math.max(0, Math.min(100, Math.floor(p.x / (COLS * T) * 100)));
-function win() { state = 'won'; recordBest(100); saveCoins(); savedCoins = new Set(bestKey ? getCoins(bestKey) : []); }
-function toggleMute() { unlockAudio(); muted = !muted; music.muted = deathSnd.muted = muted; }
-function setCheckpoint() { if (practice && state === 'play') cp = { p: { ...p, trail: p.trail && [...p.trail] }, orbs: new Set(usedOrbs), coins: new Set(runCoins) }; }
+function win() { state = 'won'; winTime = runSec(); recordBest(100); saveCoins(); savedCoins = new Set(bestKey ? getCoins(bestKey) : []); }
+function toggleMute() { unlockAudio(); muted = !muted; music.muted = deathSnd.muted = muted; toast(muted ? 'Ton aus' : 'Ton an'); }
+function setCheckpoint() { if (practice && state === 'play') { cp = { p: { ...p, trail: p.trail && [...p.trail] }, orbs: new Set(usedOrbs), coins: new Set(runCoins), ticks: runTicks }; toast('Checkpoint gesetzt'); } }
 let startX = START_COL * T, startT = 0; // Startposition (px) und Musikstart (s)
 function playMusic() {
   if (!audioOn || practice) return;
@@ -83,8 +121,10 @@ function unlockAudio() {
   if (state === 'play') playMusic();
 }
 function reset() {
-  if (practice && cp) { p = { ...cp.p, trail: cp.p.trail && [...cp.p.trail] }; usedOrbs = new Set(cp.orbs); runCoins = new Set(cp.coins); }
+  if (practice && cp) { p = { ...cp.p, trail: cp.p.trail && [...cp.p.trail] }; usedOrbs = new Set(cp.orbs); runCoins = new Set(cp.coins); runTicks = cp.ticks || 0; }
   else {
+    if (endless) endlessInit();
+    runTicks = 0;
     p = { x: startX, y: (ROWS - 2) * T, vy: 0, ground: true, rot: 0, target: 0, ship: false, grav: startGrav(), spd: speedAtX(map, startX) };
     usedOrbs = new Set(); runCoins = new Set();
   }
@@ -95,7 +135,7 @@ function reset() {
 // Tod: Partikel-Explosion, nach ~0,5 s (30 Ticks) Neustart
 function die() {
   state = 'dead'; timer = 30; deathPct = progressPct();
-  recordBest(deathPct);
+  if (endless) { deathSec = runSec(); recordTime(deathSec); } else recordBest(deathPct);
   music.pause(); music.currentTime = 0;
   if (audioOn) { deathSnd.currentTime = 0; deathSnd.play().catch(() => {}); }
   for (let i = 0; i < 24; i++) {
@@ -150,25 +190,81 @@ function loadCustom() { // gültiges Level aus localStorage oder null
     return Array.isArray(v) && v.length >= 2 && v.every(r => typeof r === 'string') ? v : null;
   } catch { return null; }
 }
-function startLevel(m, x, key) { // x: optionale Start-x-Position (Musikzeit = timeAtX); m: Grid oder Rezept (levels.js)
-  m = levelGrid(m);
+function startLevel(m, x, key, name) { // x: optionale Start-x-Position (Musikzeit = timeAtX); m: Grid oder Rezept (levels.js)
+  m = levelGrid(m); endless = null; levelName = name || m.name || 'Level';
   const track = m.music || 'audio/music.mp3';
   if (!music.src.endsWith(track)) music.src = track;
   startX = x ?? START_COL * T; startT = Math.max(0, timeAtX(m, startX));
   setMap(m); attempt = 1; cp = null; bestKey = key || null; savedCoins = new Set(bestKey ? getCoins(bestKey) : []); reset();
 }
+// Endlos: Level wächst in Abschnitten (buildLevel), alte Spalten fallen weg. Tempo +1 Stufe je ~30 s, Schwierigkeit steigt mit.
+// Abschnitte haben gerade Taktzahlen und liegen exakt aneinander, so bleibt die Musik im Takt.
+const ENDLESS = { music: 'audio/music.mp3', bpm: 120, offset: 0 };
+let endless = null; // { seed, idx (Abschnittszähler), t (geplante Zeit am Abschnittsanfang, s), wx (Welt-x am Abschnittsanfang) }
+function endlessInit() {
+  const t0 = recipeStart(ENDLESS.bpm, ENDLESS.offset);
+  endless = { seed: Math.floor(Math.random() * 1e9), idx: 0, t: t0, wx: START_COL * T + t0 * PPS };
+  setMap(Array(LEVEL_ROWS).fill('')); COLS = Infinity; map.bpm = ENDLESS.bpm;
+  endlessGrow(START_COL * T);
+}
+function endlessChunk() {
+  const e = endless, seed = e.seed + e.idx * 7919, rnd = mulberry32(seed), bar = 4 * 60 / ENDLESS.bpm;
+  const pool = ['cube', 'cube'];
+  if (e.t >= 10) pool.push('ship');
+  if (e.t >= 25) pool.push('gravity');
+  if (e.t >= 45) pool.push('wave');
+  const mode = e.idx ? pool[Math.floor(rnd() * pool.length)] : 'cube', sections = [];
+  let t = e.t, len = 0;
+  const add = (m, bars) => {
+    const speed = Math.min(4, 1 + Math.floor((t + 4) / 30)), difficulty = Math.max(1, Math.min(5, 1 + Math.floor(t / 25) - (rnd() < 0.25 ? 1 : 0)));
+    sections.push({ mode: m, bars, difficulty, speed });
+    len += bars * bar * PPS * SPEEDS[speed - 1]; t += bars * bar;
+  };
+  add(mode, 4);
+  if (mode !== 'cube') add('cube', 2); // zurück auf Würfel, damit Abschnitte ohne Portal-Konflikt aneinanderpassen
+  const rows = buildLevel({ bpm: ENDLESS.bpm, offset: ENDLESS.offset, seed, sections, coins: false });
+  const n = Math.round((e.wx + len) / T) - Math.round(e.wx / T), from = e.idx ? rows.c0 : 0;
+  for (let r = 0; r < map.length; r++) map[r] += rows[r].slice(from, rows.c0 + n);
+  e.idx++; e.t = t; e.wx += len;
+}
+function endlessGrow(px) { while (colOff + map[0].length - Math.floor(px / T) < 100) endlessChunk(); }
+function endlessTick() {
+  endlessGrow(p.x);
+  const drop = Math.floor(p.x / T) - 12 - colOff;
+  if (drop >= 40) { for (let r = 0; r < map.length; r++) map[r] = map[r].slice(drop); colOff += drop; }
+}
+function startEndless() {
+  practice = false; // Übungsmodus gilt hier nicht
+  if (!music.src.endsWith(ENDLESS.music)) music.src = ENDLESS.music;
+  levelName = 'Endlos'; startX = START_COL * T; startT = 0; attempt = 1; cp = null; bestKey = null; savedCoins = new Set();
+  endless = {}; reset(); // reset() erzeugt die Welt
+}
+// Tageslevel: Seed = heutiges Datum (YYYYMMDD), mittlere Schwierigkeit
+let dailyRec = null;
+function dailyLevel() {
+  const d = new Date(), key = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  if (dailyRec?.key === key) return dailyRec;
+  const rnd = mulberry32(key), pool = ['cube', 'cube', 'ship', 'gravity', 'wave'], sections = [];
+  for (let i = 0; i < 12; i++) sections.push({ mode: i ? pool[Math.floor(rnd() * pool.length)] : 'cube', bars: 3 + Math.floor(rnd() * 2), difficulty: 2 + Math.floor(rnd() * 3), speed: i < 5 ? 1 : 2 });
+  const pad = n => String(n).padStart(2, '0');
+  return dailyRec = { key, name: 'Tageslevel ' + pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(), music: 'audio/music.mp3', bpm: 120, offset: 0, seed: key, sections };
+}
+function startDaily() { const r = dailyLevel(); startLevel(r, undefined, 'D' + r.key, r.name); }
 function goMenu() {
   state = 'menu'; cp = null; down.clear(); held = false; inputLocked = false; parts = [];
   music.pause(); music.currentTime = 0;
-  const bw = 240, bx = (cv.width - bw) / 2;
-  buttons = [
-    { label: 'Spielen', x: bx, y: 105, w: bw, h: 42, fn: goLevels },
-    { label: 'Editor', x: bx, y: 155, w: bw, h: 42, fn: () => { location.href = 'editor.html'; } },
-    { label: 'Icon', x: 690, y: 18, w: 92, h: 40, fn: goIcons },
+  const bw = 240, gap = 16, bx = (cv.width - 2 * bw - gap) / 2, custom = loadCustom(), daily = dailyLevel(), bt = getBestT();
+  const items = [
+    { label: 'Spielen', fn: goLevels },
+    { label: 'Endlos', sub: bt ? 'Best: ' + fmtSec(bt) : '', fn: startEndless },
+    { label: 'Tageslevel', sub: [bestText('D' + daily.key), coinText('D' + daily.key, levelCoins(daily))].filter(Boolean).join('   '), fn: startDaily },
+    { label: 'Editor', fn: () => { location.href = 'editor.html'; } },
   ];
-  const custom = loadCustom();
-  if (custom) buttons.push({ label: 'Eigenes Level', sub: [bestText('custom'), coinText('custom', levelCoins(custom))].filter(Boolean).join('   '), x: bx, y: 205, w: bw, h: 42, fn: () => startLevel(custom, undefined, 'custom') });
-  buttons.push({ label: 'Übungsmodus: ' + (practice ? 'An' : 'Aus'), x: bx, y: custom ? 255 : 205, w: bw, h: 42, fn: () => { practice = !practice; goMenu(); } });
+  if (custom) items.push({ label: 'Eigenes Level', sub: [bestText('custom'), coinText('custom', levelCoins(custom))].filter(Boolean).join('   '), fn: () => startLevel(custom, undefined, 'custom', 'Eigenes Level') });
+  items.push({ label: 'Übungsmodus: ' + (practice ? 'An' : 'Aus'), fn: () => { practice = !practice; goMenu(); } });
+  buttons = items.map((b, i) => ({ ...b, x: bx + (i % 2) * (bw + gap), y: 105 + Math.floor(i / 2) * 50, w: bw, h: 42 }));
+  if (items.length % 2) buttons[items.length - 1].x = (cv.width - bw) / 2;
+  buttons.push({ label: 'Icon', x: 690, y: 18, w: 92, h: 40, fn: goIcons });
 }
 const bestText = key => getBest(key) ? 'Best: ' + getBest(key) + '%' : '';
 function goIcons() {
@@ -187,7 +283,7 @@ function goLevels() {
     return {
       label: m.name || 'Level ' + (i + 1), stars: d, sub: [bestText('L' + i), coinText('L' + i, levelCoins(m))].filter(Boolean).join('   '),
       x: (cv.width - (Math.min(per, LEVELS.length - Math.floor(i / per) * per) * (bw + gap) - gap)) / 2 + (i % per) * (bw + gap),
-      y: 135 + Math.floor(i / per) * 56, w: bw, h: 48, fn: () => startLevel(m, undefined, 'L' + i),
+      y: 135 + Math.floor(i / per) * 56, w: bw, h: 48, fn: () => startLevel(m, undefined, 'L' + i, m.name || 'Level ' + (i + 1)),
     };
   });
   buttons.push({ label: 'Zurück', x: (cv.width - 240) / 2, y: 352, w: 240, h: 38, fn: goMenu });
@@ -233,6 +329,7 @@ function drawMenu() {
     ctx.fillText('Springen: Leertaste / Klick / Touch  ·  M = Ton  ·  ESC = Menü', cv.width / 2, 345);
     ctx.fillText('Übungsmodus: Z = Checkpoint setzen (am Handy: Z-Button)', cv.width / 2, 367);
   }
+  drawToast();
 }
 
 // Portal-Spalte durchflogen? ch = 'S' (Schiff) oder 'C' (Würfel); gilt für die ganze Spalte
@@ -313,6 +410,8 @@ function update() {
     if (--timer <= 0) { attempt++; reset(); }
     return;
   }
+  if (endless) endlessTick();
+  runTicks++;
   if (p.wave) { pressed = false; return updateWave(); }
   if (p.ship) { pressed = false; return updateShip(); }
   if (held && !inputLocked && p.ground) { p.vy = JUMP * p.grav; p.ground = false; p.target += p.grav * Math.PI / 2; }
@@ -370,7 +469,7 @@ function draw() {
   updateBass();
   // Hintergrundfarbe: alle 8 Takte (4/4) neuer Ton, weicher Übergang
   const bpm = map.bpm ?? (typeof BPM !== 'undefined' ? BPM : 120);
-  const seg = Math.max(0, Math.floor(timeAtX(map, p.x) / (8 * 4 * 60 / bpm)));
+  const seg = Math.max(0, Math.floor((endless ? runSec() : timeAtX(map, p.x)) / (8 * 4 * 60 / bpm)));
   hueCur += (220 + seg * 50 - hueCur) * Math.min(1, 0.02 * k);
   const hue = hueCur;
   // neuer Versuch: Effekte zurücksetzen
@@ -498,37 +597,49 @@ function draw() {
     else flash = null;
   }
   // Fortschrittsbalken + Versuchszähler
-  ctx.fillStyle = '#0006'; ctx.fillRect(100, 10, 600, 10);
-  ctx.fillStyle = '#4f4'; ctx.fillRect(100, 10, 600 * pr, 10);
+  if (endless) { // Endlos: Zeit statt Fortschrittsbalken
+    const bt = getBestT();
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(fmtSec(state === 'dead' ? deathSec : runSec()) + '   ·   Tempo ×' + p.spd + (bt ? '   ·   Best ' + fmtSec(bt) : ''), cv.width / 2, 22);
+  } else {
+    ctx.fillStyle = '#0006'; ctx.fillRect(100, 10, 600, 10);
+    ctx.fillStyle = '#4f4'; ctx.fillRect(100, 10, 600 * pr, 10);
+  }
   ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('Versuch ' + attempt, 10, 20);
   if (practice) { ctx.fillStyle = '#4fe8ff'; ctx.fillText('Übungsmodus', 10, 40); }
   if (coinIdx.size) { ctx.fillStyle = '#ffd400'; ctx.fillText('◎ ' + runCoins.size + '/' + coinIdx.size, 10, practice ? 60 : 40); }
   if (state === 'dead') { // erreichter Prozentwert groß, blendet in den letzten Ticks aus
     ctx.globalAlpha = Math.min(1, timer / 10); ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 96px sans-serif';
-    ctx.shadowColor = '#000'; ctx.shadowBlur = 8; ctx.fillText(deathPct + '%', cv.width / 2, 240); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 8; ctx.fillText(endless ? fmtSec(deathSec) : deathPct + '%', cv.width / 2, 240); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
   }
   if (state === 'dead' && newRecord) {
     ctx.fillStyle = '#ffd400'; ctx.textAlign = 'center'; ctx.font = 'bold 32px sans-serif';
-    ctx.fillText('Neuer Rekord! ' + progressPct() + '%', cv.width / 2, 130);
+    ctx.fillText('Neuer Rekord! ' + (endless ? fmtSec(deathSec) : progressPct() + '%'), cv.width / 2, 130);
   }
-  ctx.textAlign = 'center'; ctx.font = 'bold 16px sans-serif';
-  for (const b of hudButtons()) {
-    ctx.fillStyle = '#0008'; ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = '#cfe0ff'; ctx.strokeRect(b.x, b.y, b.w, b.h);
-    ctx.fillStyle = '#fff'; ctx.fillText(b.label, b.x + b.w / 2, b.y + 22);
-  }
+  drawButtons(hudButtons());
   ctx.textAlign = 'left';
   if (state === 'won') {
     ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
     ctx.font = '40px sans-serif'; ctx.fillText('Level geschafft!', cv.width / 2, 170);
     ctx.font = '20px sans-serif';
-    ctx.fillText('Versuche: ' + attempt + (coinIdx.size ? '   ◎ ' + runCoins.size + '/' + coinIdx.size + (practice ? ' (Übung: nicht gespeichert)' : '') : ''), cv.width / 2, 210);
-    ctx.fillText('Leertaste zum Neustart', cv.width / 2, 245);
+    ctx.fillText('Versuche: ' + attempt + '   Zeit: ' + fmtTime(winTime) + (coinIdx.size ? '   ◎ ' + runCoins.size + '/' + coinIdx.size + (practice ? ' (Übung: nicht gespeichert)' : '') : ''), cv.width / 2, 210);
+    ctx.fillText('Leertaste = Neustart  ·  C = Ergebnis kopieren', cv.width / 2, 245);
+    drawButtons(winButtons());
   }
+  drawToast();
 }
 
+function drawButtons(list) {
+  ctx.textAlign = 'center'; ctx.font = 'bold 16px sans-serif';
+  for (const b of list) {
+    ctx.fillStyle = '#0008'; ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = '#cfe0ff'; ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = '#fff'; ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 6);
+  }
+}
+const winButtons = () => [{ label: 'Ergebnis kopieren', x: 290, y: 262, w: 220, h: 36, fn: copyResult }];
 // Buttons im Spiel (Touch): Menü, Ton, Checkpoint (nur Übungsmodus)
 function hudButtons() {
   const l = [{ label: '☰', x: 758, y: 28, w: 34, h: 30, fn: goMenu }, { label: '♪', x: 720, y: 28, w: 34, h: 30, fn: toggleMute }];
@@ -538,7 +649,7 @@ function hudButtons() {
 function hudClick(e) {
   const r = cv.getBoundingClientRect();
   const x = (e.clientX - r.left) * cv.width / r.width, y = (e.clientY - r.top) * cv.height / r.height;
-  const b = hudButtons().find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  const b = [...hudButtons(), ...(state === 'won' ? winButtons() : [])].find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (b) b.fn();
   return !!b;
 }
@@ -565,6 +676,7 @@ addEventListener('keydown', e => { // M: alles stumm/an
   toggleMute();
 });
 addEventListener('keydown', e => { if (e.code === 'KeyZ' && !e.repeat) setCheckpoint(); }); // Z: Checkpoint (Übungsmodus)
+addEventListener('keydown', e => { if (e.code === 'KeyC' && !e.repeat && state === 'won') copyResult(); }); // C: Ergebnis kopieren
 addEventListener('keydown', set(true)); addEventListener('keyup', set(false));
 cv.addEventListener('pointerdown', set(true)); addEventListener('pointerup', set(false)); addEventListener('pointercancel', set(false));
 cv.addEventListener('contextmenu', e => e.preventDefault());

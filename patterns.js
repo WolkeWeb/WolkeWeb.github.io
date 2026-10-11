@@ -62,7 +62,7 @@ const leg = (B, d) => cols(shipTicks(d + T) * 1.3 * B.v) + 1; // Spalten, um d p
 // bei umgekehrter Schwerkraft (up) wird vertikal gespiegelt (Decke = Zeile 0). B.abs nimmt echte Zeilen.
 function mkB(g, c0, spd, up, rnd, avail, d) {
   const v = SPEED * spd, ar = arc(up ? T + 2 : 28, spd), log = [];
-  const B = { g, c0, spd, up, rnd, avail, d, v, ar, sep: cols(ar.px + 10) }; // sep = Mindestabstand von Hindernisanfang zu Hindernisanfang
+  const B = { g, c0, spd, up, rnd, avail, d, v, ar, sep: cols(ar.px + 10), cands: [] }; // sep = Mindestabstand von Hindernisanfang zu Hindernisanfang
   B.abs = (dc, r, ch) => {
     const c = c0 + dc;
     if (c < 0 || !g[r] || c >= g[r].length) return;
@@ -70,9 +70,25 @@ function mkB(g, c0, spd, up, rnd, avail, d) {
   };
   B.undo = () => { while (log.length) { const [r, c, o] = log.pop(); g[r][c] = o; } };
   B.put = (dc, r, ch) => B.abs(dc, up ? F - r : r, ch);
+  B.cand = (dc, r, abs) => B.cands.push({ c: c0 + dc, r: up && !abs ? F - r : r }); // mögliche Münzstelle (r = Würfel-Zeile, abs = echte Zeile)
   B.blocks = (dc0, dc1, h) => { for (let c = dc0; c < dc1; c++) for (let r = F - h; r < F; r++) B.put(c, r, '#'); };
   B.spikes = (dc, n = 1, r = S) => { for (let i = 0; i < n; i++) B.put(dc + i, r, '^'); };
   return B;
+}
+// Anzahl Absprung-Ticks, mit denen ein Sprung über n Spikes (ab Spalte 0) die Münze in Spalte dc, hc px über der Standfläche einsammelt (ohne Tod, Landung noch im Musterbereich)
+function coinWindow(B, n, dc, hc) {
+  const v = B.v, clr = B.up ? T + 2 : 28, maxLand = (B.sep - 1) * T;
+  let cnt = 0;
+  for (let x0 = -28; x0 >= -300; x0 -= v) {
+    const fl = flight(x0, v, JUMP);
+    let ok = true, hit = false;
+    fl.forEach((q, i) => {
+      if (q.x > -28 && q.x < 28 + (n - 1) * T && q.h < clr) ok = false;
+      if (Math.abs(q.x - dc * T) < 34 && Math.abs((fl[i + 1] || q).h - hc) < 34) hit = true;
+    });
+    if (ok && hit && fl[fl.length - 1].x <= maxLand) cnt++;
+  }
+  return cnt;
 }
 const needPx = n => n * T + 16; // n Spikes nebeneinander: Hitbox-Breite + Spielerbreite
 const WIN = 30; // Mindest-Absprungfenster (px) bei Spike-Gruppen
@@ -81,6 +97,10 @@ const WIN = 30; // Mindest-Absprungfenster (px) bei Spike-Gruppen
 const spikeGroup = n => B => {
   if (B.ar.spikePx - needPx(n) < WIN) return 0;
   B.spikes(0, n);
+  for (let dc = 0; dc <= n + 1; dc++) for (const k of [2, 3]) { // Münze nur mit knappem Absprungfenster (4–12 Ticks)
+    const cnt = coinWindow(B, n, dc, k * T);
+    if (cnt >= 4 && cnt <= 12) B.cand(dc, S - k);
+  }
   return Math.max(n + 1, B.sep);
 };
 
@@ -181,6 +201,7 @@ const orbChain = B => { // Spikefeld, nur mit Orb-Kette überquerbar (Orbs 2 Kac
   const last = 1 + (n - 1) * sp, fe = last + Math.min(post, 3);
   B.spikes(0, fe + 1);
   for (let i = 0; i < n; i++) B.put(1 + i * sp, 6, 'O');
+  B.cand(1 + Math.round(17.7 * v / T), 3); // Scheitel des Sprungs vom ersten Orb: nur mit frühem Orb-Druck erreichbar
   return fe + 1 + 4;
 };
 
@@ -210,19 +231,29 @@ const flipMid = reps => B => {
 
 // ---- Schiff: Tunnel aus Zuständen {t, b, n, sp}: Wände oben (Zeilen < t) und unten (Zeilen >= b), n Spalten, sp = Spikes an den Rändern ----
 const free = n => ({ t: 0, b: F, n });
-function lay(B, list) { // Zustände setzen, auf die verfügbare Breite kürzen, am Ende 3 freie Spalten
+function lay(B, list, coins = true) { // Zustände setzen, auf die verfügbare Breite kürzen, am Ende 3 freie Spalten
   const tail = 3;
   let tot = 0;
   const keep = [];
   for (const s of list) { if (tot + s.n + tail > B.avail) break; keep.push(s); tot += s.n; }
   if (keep.length < 3) return 0;
   let c = 0;
+  const starts = [];
   for (const s of keep) {
+    starts.push(c);
     for (let i = 0; i < s.n; i++, c++) {
       for (let r = 0; r < s.t; r++) B.abs(c, r, '#');
       for (let r = s.b; r < F; r++) B.abs(c, r, '#');
       if (s.sp && s.t >= 1 && i >= 1 && i < s.n - 1) B.abs(c, i % 2 ? s.t : s.b - 1, '^');
     }
+  }
+  if (coins) for (let j = 1; j < keep.length - 1; j++) { // Münze an der Tunnelwand (abseits der Mitte), Zeile in allen drei Nachbarzuständen frei
+    const [a, s, b] = [keep[j - 1], keep[j], keep[j + 1]];
+    if (a.sp || s.sp || b.sp) continue;
+    const lo = Math.max(a.t, s.t, b.t), hi = Math.min(a.b, s.b, b.b) - 1, dc = starts[j] + (s.n >> 1);
+    if (hi - lo < 1) continue;
+    if (lo >= 1) B.cand(dc, lo, true);
+    B.cand(dc, hi, true);
   }
   return c + tail;
 }
@@ -258,16 +289,16 @@ const shipNarrow = B => { // enge Schlucht (3 Kacheln), sanftes Weben
 };
 
 // ---- Welle: 45°-Flug (Steigung 1) → Tunnel mit Diagonalen (n = 1 Spalte je Stufe), Tore mit Abstand ≥ Höhendifferenz + Reserve ----
-const waveStep = (G, tops) => B => lay(B, [free(10), ...tops.map(t => ({ t, b: t + G, n: 1 }))]);
+const waveStep = (G, tops) => B => lay(B, [free(10), ...tops.map(t => ({ t, b: t + G, n: 1 }))], false);
 const waveGates = B => { // Tore (Lücke 4 Kacheln) auf wechselnder Höhe, dazwischen offener Raum
   const sh = B.d <= 4 ? 1 : 2, m = 6 + sh, list = [free(10)];
   for (let i = 0; i < 4 + (B.d >= 5 ? 2 : 0); i++) list.push({ t: 1 + (i % 2) * sh, b: 5 + (i % 2) * sh, n: 1 }, free(m));
-  return lay(B, list);
+  return lay(B, list, false);
 };
 const waveSpikes = B => { // breiter Korridor mit Spikes an Decke und Boden
   const G = B.d >= 5 ? 6 : 7, list = [free(10)];
   for (let i = 0; i < 3 + B.d; i++) { const t = 1 + i % 2; list.push({ t, b: t + G, n: 6, sp: true }); }
-  return lay(B, list);
+  return lay(B, list, false);
 };
 
 const PATTERNS = [
@@ -326,6 +357,20 @@ function runway(prev, s) { // freie Spalten hinter dem Portal, damit der Spieler
   return s.lvl !== prev.lvl ? cols(airTicks(0, JUMP) * v) + 1 : 0; // Tempowechsel im Sprung verlängert die Flugbahn
 }
 
+// MAX_COINS Münzen: je eine pro Drittel des Levels (Mindestabstand 8 Spalten), danach aus dem Rest auffüllen
+function placeCoins(g, cands, rnd) {
+  const ok = cands.filter(q => g[q.r]?.[q.c] === '.');
+  if (!ok.length) return;
+  const lo = Math.min(...ok.map(q => q.c)), span = (Math.max(...ok.map(q => q.c)) - lo + 1) / MAX_COINS, chosen = [];
+  const free = q => chosen.every(o => Math.abs(o.c - q.c) >= 8), pick = l => l[Math.floor(rnd() * l.length)];
+  for (let z = 0; z < MAX_COINS; z++) {
+    const zone = ok.filter(q => q.c >= lo + z * span && q.c < lo + (z + 1) * span && free(q));
+    if (zone.length) chosen.push(pick(zone));
+  }
+  for (let rest; chosen.length < MAX_COINS && (rest = ok.filter(q => !chosen.includes(q) && free(q))).length;) chosen.push(pick(rest));
+  for (const q of chosen) g[q.r][q.c] = '*';
+}
+
 function buildLevel(rec) {
   const bpm = rec.bpm > 0 ? rec.bpm : 120, beat = 60 / bpm, rnd = mulberry32(Math.floor(rec.seed) || 0);
   const secs = (rec.sections || []).map(s => ({
@@ -347,6 +392,7 @@ function buildLevel(rec) {
   if (last.mode === 'gravity') g[3][last.end] = 'N';
 
   let nPat = 0;
+  const cands = []; // mögliche Münzstellen aller Muster
   secs.forEach((s, i) => {
     const prev = i ? secs[i - 1] : { mode: 'cube', lvl: 1 };
     if (shape(s.mode) !== shape(prev.mode)) g[4][s.cp] = { ship: 'S', wave: 'W', cube: 'C' }[shape(s.mode)];
@@ -368,7 +414,7 @@ function buildLevel(rec) {
         while (k < pool.length - 1 && (r -= wt[k]) >= 0) k++;
         const p = pool.splice(k, 1)[0], B = mkB(g, cs, s.spd, up, rnd, lim - cs, s.d);
         w = p.build(B);
-        if (w > 0 && cs + w <= lim) { lastId = p.id; nPat++; }
+        if (w > 0 && cs + w <= lim) { lastId = p.id; nPat++; cands.push(...B.cands); }
         else { B.undo(); w = 0; }
       }
       if (!w) break;
@@ -376,8 +422,9 @@ function buildLevel(rec) {
     }
   });
 
+  if (rec.coins !== false) placeCoins(g, cands, rnd);
   const rows = g.map(r => r.join(''));
-  Object.assign(rows, { name: rec.name, music: rec.music, bpm, offset: rec.offset || 0, patterns: nPat });
+  Object.assign(rows, { name: rec.name, music: rec.music, bpm, offset: rec.offset || 0, patterns: nPat, c0: secs.length ? secs[0].cp : START_COL }); // c0 = Portalspalte des ersten Abschnitts
   return rows;
 }
 
