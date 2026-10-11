@@ -18,7 +18,7 @@ let audioOn = false, muted = false;
 // Übungsmodus (im Hauptmenü umschaltbar): Checkpoint mit Z / Button, Tod → zurück zum Checkpoint, keine Musik
 let practice = false, cp = null;
 // Bestleistung in % pro Level (localStorage); bestKey = Level-Kennung ('L0', 'custom') oder null (nicht gespeichert)
-let bestKey = null, newRecord = false;
+let bestKey = null, newRecord = false, deathPct = 0;
 const getBest = key => { try { return +localStorage.getItem('gdBest.' + key) || 0; } catch { return 0; } };
 function recordBest(pct) {
   if (!bestKey || practice || startX !== START_COL * T || pct <= getBest(bestKey)) return;
@@ -70,8 +70,8 @@ function reset() {
 }
 // Tod: Partikel-Explosion, nach ~0,5 s (30 Ticks) Neustart
 function die() {
-  state = 'dead'; timer = 30;
-  recordBest(progressPct());
+  state = 'dead'; timer = 30; deathPct = progressPct();
+  recordBest(deathPct);
   music.pause(); music.currentTime = 0;
   if (audioOn) { deathSnd.currentTime = 0; deathSnd.play().catch(() => {}); }
   for (let i = 0; i < 24; i++) {
@@ -126,13 +126,16 @@ function goMenu() {
 const bestText = key => getBest(key) ? 'Best: ' + getBest(key) + '%' : '';
 function goLevels() {
   state = 'levels';
-  const bw = 100, gap = 16, per = 5;
-  buttons = LEVELS.map((m, i) => ({
-    label: String(i + 1), sub: bestText('L' + i),
-    x: (cv.width - (Math.min(per, LEVELS.length - i + i % per) * (bw + gap) - gap)) / 2 + (i % per) * (bw + gap),
-    y: 140 + Math.floor(i / per) * 60, w: bw, h: 44, fn: () => startLevel(m, undefined, 'L' + i),
-  }));
-  buttons.push({ label: 'Zurück', x: (cv.width - 240) / 2, y: 340, w: 240, h: 40, fn: goMenu });
+  const bw = 240, gap = 16, per = 2;
+  buttons = LEVELS.map((m, i) => {
+    const secs = m.sections, d = secs?.length ? Math.max(1, Math.min(5, Math.round(secs.reduce((a, s) => a + (s.difficulty || 1), 0) / secs.length))) : 0;
+    return {
+      label: m.name || 'Level ' + (i + 1), stars: d, sub: bestText('L' + i),
+      x: (cv.width - (Math.min(per, LEVELS.length - Math.floor(i / per) * per) * (bw + gap) - gap)) / 2 + (i % per) * (bw + gap),
+      y: 135 + Math.floor(i / per) * 56, w: bw, h: 48, fn: () => startLevel(m, undefined, 'L' + i),
+    };
+  });
+  buttons.push({ label: 'Zurück', x: (cv.width - 240) / 2, y: 352, w: 240, h: 38, fn: goMenu });
 }
 function menuClick(e) {
   const r = cv.getBoundingClientRect();
@@ -152,7 +155,11 @@ function drawMenu() {
     ctx.fillStyle = '#3d5a9e'; ctx.fillRect(b.x, b.y, b.w, b.h);
     ctx.strokeStyle = '#cfe0ff'; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h); ctx.lineWidth = 1;
     ctx.fillStyle = '#fff';
-    if (b.sub) { ctx.fillText(b.label, b.x + b.w / 2, b.y + 24); ctx.font = '13px sans-serif'; ctx.fillStyle = '#cfe0ff'; ctx.fillText(b.sub, b.x + b.w / 2, b.y + 39); ctx.font = '22px sans-serif'; }
+    if (b.stars || b.sub) {
+      const info = [b.stars ? '★'.repeat(b.stars) + '☆'.repeat(5 - b.stars) : '', b.sub].filter(Boolean).join('   ');
+      ctx.fillText(b.label, b.x + b.w / 2, b.y + (b.h > 44 ? 22 : 24));
+      ctx.font = '13px sans-serif'; ctx.fillStyle = '#cfe0ff'; ctx.fillText(info, b.x + b.w / 2, b.y + (b.h > 44 ? 40 : 39)); ctx.font = '22px sans-serif';
+    }
     else ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 8);
   }
   if (state === 'menu') { // Steuerungshilfe
@@ -386,6 +393,10 @@ function draw() {
   ctx.fillStyle = '#fff'; ctx.font = '16px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('Versuch ' + attempt, 10, 20);
   if (practice) { ctx.fillStyle = '#4fe8ff'; ctx.fillText('Übungsmodus', 10, 40); }
+  if (state === 'dead') { // erreichter Prozentwert groß, blendet in den letzten Ticks aus
+    ctx.globalAlpha = Math.min(1, timer / 10); ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = 'bold 96px sans-serif';
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 8; ctx.fillText(deathPct + '%', cv.width / 2, 240); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
   if (state === 'dead' && newRecord) {
     ctx.fillStyle = '#ffd400'; ctx.textAlign = 'center'; ctx.font = 'bold 32px sans-serif';
     ctx.fillText('Neuer Rekord! ' + progressPct() + '%', cv.width / 2, 130);

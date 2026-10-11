@@ -2,7 +2,13 @@ const T = TILE; // Konstanten kommen aus config.js
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 const msg = document.getElementById('msg');
 
-const PALETTE = [['#', 'Block #'], ['^', 'Spike ^'], ['o', 'Jump-Pad o'], ['O', 'Orb O'], ['|', 'Ziel |'], ['S', 'Schiff-Portal S'], ['C', 'Würfel-Portal C'], ['U', 'Schwerkraft umkehren U'], ['N', 'Normale Schwerkraft N'], ['1', 'Tempo 1,0× (1)'], ['2', 'Tempo 1,2× (2)'], ['3', 'Tempo 1,4× (3)'], ['4', 'Tempo 1,7× (4)'], ['>', 'Alias Tempo 3 >'], ['<', 'Alias Tempo 1 <'], ['.', 'Radierer']];
+// Gruppen: [Titel, [[Zeichen, Beschriftung, Tooltip]]]
+const PALETTE = [
+  ['Blöcke', [['#', '■', 'Block #'], ['^', '▲', 'Spike ^'], ['.', '⌫', 'Radierer']]],
+  ['Objekte', [['o', '▂', 'Jump-Pad o'], ['O', '●', 'Orb O'], ['|', '⚑', 'Ziel |']]],
+  ['Modus', [['S', 'S', 'Schiff-Portal S'], ['C', 'C', 'Würfel-Portal C'], ['U', '↑', 'Schwerkraft umkehren U'], ['N', '↓', 'Normale Schwerkraft N']]],
+  ['Tempo', [['1', '1', 'Tempo 1,0× (1)'], ['2', '2', 'Tempo 1,2× (2)'], ['3', '3', 'Tempo 1,4× (3)'], ['4', '4', 'Tempo 1,7× (4)']]],
+];
 let brush = '#', cam = 0;
 
 // Level laden (gleiches Format wie game.js: JSON-Array von Zeilen) oder leeres Level mit Boden
@@ -35,13 +41,19 @@ function say(t) { msg.textContent = t; }
 
 // Palette
 const pal = document.getElementById('pal');
-const palBtns = PALETTE.map(([ch, label]) => {
-  const b = document.createElement('button');
-  b.textContent = label;
-  b.onclick = () => { brush = ch; sync(); };
-  pal.append(b);
-  return [ch, b];
-});
+const palBtns = [];
+for (const [title, items] of PALETTE) {
+  const g = document.createElement('span'); g.className = 'grp';
+  g.innerHTML = '<small>' + title + '</small>';
+  for (const [ch, label, tip] of items) {
+    const b = document.createElement('button');
+    b.textContent = label; b.title = tip;
+    if (PORTALS[ch]) b.style.borderColor = PORTALS[ch][0];
+    b.onclick = () => { brush = ch; sync(); };
+    g.append(b); palBtns.push([ch, b]);
+  }
+  pal.append(g);
+}
 function sync() { for (const [ch, b] of palBtns) b.classList.toggle('sel', ch === brush); }
 sync();
 
@@ -91,7 +103,21 @@ function cellAt(e) {
   const c = Math.floor((x + cam) / T), row = Math.floor(y / T);
   return c >= 0 && c < COLS && row >= 0 && row < ROWS ? [c, row] : null;
 }
-let paintCh = null;
+// Undo/Redo: Schnappschüsse des Grids (Zeilen mit \n verbunden)
+const undoSt = [], redoSt = [];
+const snap = () => rowsText().join('\n');
+function pushUndo(s) { undoSt.push(s); if (undoSt.length > 100) undoSt.shift(); redoSt.length = 0; }
+function restore(s) { grid = toGrid(s.split('\n')); ROWS = grid.length; COLS = grid[0].length; cam = Math.min(cam, maxCam()); }
+function undo() { if (undoSt.length) { redoSt.push(snap()); restore(undoSt.pop()); say('Rückgängig.'); } }
+function redo() { if (redoSt.length) { undoSt.push(snap()); restore(redoSt.pop()); say('Wiederholt.'); } }
+addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const t = e.target;
+  if (t.tagName === 'SELECT' || t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'file' && t.type !== 'range')) return;
+  if (e.code === 'KeyZ') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (e.code === 'KeyY') { e.preventDefault(); redo(); }
+});
+let paintCh = null, strokeStart = null;
 function paint(e) {
   const cell = cellAt(e);
   if (cell) grid[cell[1]][cell[0]] = paintCh;
@@ -101,10 +127,15 @@ cv.addEventListener('pointerdown', e => {
   if (e.button !== 0 && e.button !== 2) return;
   paintCh = e.button === 2 ? '.' : brush;
   cv.setPointerCapture(e.pointerId);
+  strokeStart = snap();
   paint(e);
 });
 cv.addEventListener('pointermove', e => { if (paintCh !== null && e.buttons) paint(e); });
-cv.addEventListener('pointerup', () => { paintCh = null; });
+cv.addEventListener('pointerup', () => {
+  paintCh = null;
+  if (strokeStart !== null && strokeStart !== snap()) pushUndo(strokeStart);
+  strokeStart = null;
+});
 
 // Scrollen
 const scroll = d => { cam = Math.max(0, Math.min(maxCam(), cam + d)); };
@@ -142,6 +173,7 @@ lvlSel.onchange = () => {
   const rows = v === 'custom' ? loadCustomRows() : levelGrid(LEVELS[+v.slice(1)]);
   if (!rows) { say('Kein eigenes Level gespeichert.'); return; }
   if (rows.bpm) { bpmIn.value = rows.bpm; offIn.value = rows.offset; } // Rezept-Level bringen BPM/Offset mit
+  pushUndo(snap());
   grid = toGrid(rows); ROWS = grid.length; COLS = grid[0].length;
   cam = 0;
   say('Level geladen.');
@@ -191,6 +223,7 @@ cv.after(wave);
 const tbar = document.createElement('div');
 tbar.style.cssText = 'display:flex;gap:8px;align-items:center';
 tbar.innerHTML = '<button id="play">Play (Leertaste)</button>' +
+  '<button id="detect">BPM erkennen</button>' +
   '<label>BPM <input id="bpm" type="number" min="1" max="400" step="0.01" value="120" style="width:70px"></label>' +
   '<label>Offset (ms) <input id="offset" type="number" step="1" value="0" style="width:70px"></label>';
 wave.after(tbar);
@@ -368,7 +401,48 @@ function generateLevel(diff, seed) {
     return { mode, bars: SECTION_BARS, difficulty: clamp(Math.round(diff + (e - 0.5) * 2), 1, 5), speed: Math.min(4, 1 + Math.floor(i / SECS_PER_SPEED)) };
   });
   const rows = buildLevel({ name: 'Generiert', music: 'audio/music.mp3', bpm, offset: off, seed, sections });
+  pushUndo(snap());
   grid = toGrid(rows); ROWS = grid.length; COLS = grid[0].length; cam = 0;
   const cnt = m => sections.filter(s => s.mode === m).length;
   say('Level generiert: ' + n + ' Abschnitte (' + cnt('ship') + ' Schiff, ' + cnt('gravity') + ' Schwerkraft), ' + rows.patterns + ' Muster, Schwierigkeit ' + diff + ', Seed ' + seed + '.');
 }
+
+// BPM-Erkennung: Onset-Kurve (positive Energiesprünge) → Autokorrelation → Feinsuche von BPM und Phase (Offset)
+function detectBpm() {
+  if (!abuf) { say('Erst Musik laden.'); return; }
+  const sr = abuf.sampleRate, WIN = 512, HOP = 256, hopT = HOP / sr;
+  const n = Math.floor((Math.min(abuf.duration, 120) * sr - WIN) / HOP);
+  if (n < 200) { say('Musik zu kurz.'); return; }
+  const chs = [...Array(abuf.numberOfChannels).keys()].map(i => abuf.getChannelData(i));
+  const en = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let s = 0;
+    for (const d of chs) for (let j = i * HOP; j < i * HOP + WIN; j += 2) s += d[j] * d[j];
+    en[i] = Math.log(1 + 1000 * s / WIN);
+  }
+  const on = new Float32Array(n);
+  for (let i = 1; i < n; i++) on[i] = Math.max(0, en[i] - en[i - 1]);
+  const mean = on.reduce((a, b) => a + b, 0) / n;
+  for (let i = 0; i < n; i++) on[i] = Math.max(0, on[i] - mean);
+  const at = f => { const i = Math.floor(f); return i < 0 || i + 1 >= n ? 0 : on[i] + (on[i + 1] - on[i]) * (f - i); };
+  const ac = lag => { let s = 0; for (let i = 0; i + lag + 1 < n; i++) s += on[i] * at(i + lag); return s; };
+  let best = 120, bestS = -1;
+  for (let b = 70; b <= 180; b += 0.25) {
+    const lag = 60 / b / hopT, s = ac(lag) + 0.5 * ac(lag * 2);
+    if (s > bestS) { bestS = s; best = b; }
+  }
+  // Feinsuche: Kamm über die Onsets, BPM in 0,01-Schritten, Phase in Frame-Schritten
+  const comb = (b, ph) => {
+    const beat = 60 / b; let s = 0;
+    for (let t = ph; t < n * hopT - beat; t += beat) { const f = (t - WIN / 2 / sr) / hopT; s += Math.max(at(f - 1), at(f), at(f + 1)); }
+    return s;
+  };
+  let fb = best, fp = 0, fs = -1;
+  for (let b = best - 0.6; b <= best + 0.6; b += 0.01) {
+    for (let ph = 0; ph < 60 / b; ph += hopT) { const s = comb(b, ph); if (s > fs) { fs = s; fb = b; fp = ph; } }
+  }
+  bpmIn.value = fb.toFixed(2);
+  offIn.value = Math.round(fp * 1000);
+  say('BPM erkannt: ' + fb.toFixed(2) + ', Offset ' + Math.round(fp * 1000) + ' ms (am Beat-Raster prüfen).');
+}
+tbar.querySelector('#detect').onclick = () => { say('Analysiere…'); setTimeout(detectBpm, 20); };
