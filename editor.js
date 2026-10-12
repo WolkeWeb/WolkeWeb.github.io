@@ -10,6 +10,7 @@ const PALETTE = [
   ['Tempo', [['1', '1', 'Tempo 1,0× (1)'], ['2', '2', 'Tempo 1,2× (2)'], ['3', '3', 'Tempo 1,4× (3)'], ['4', '4', 'Tempo 1,7× (4)']]],
 ];
 let brush = '#', cam = 0;
+let failCol = null; // Spalte, an der der Bot scheitert (rot markiert), null = keine
 
 // Level laden (gleiches Format wie game.js: JSON-Array von Zeilen) oder leeres Level mit Boden
 function emptyLevel() {
@@ -89,6 +90,7 @@ function draw() {
         ctx.strokeStyle = '#ff9a9a'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke(); ctx.lineWidth = 1;
       }
     }
+  if (failCol !== null) { ctx.fillStyle = '#ff000066'; ctx.fillRect(failCol * T - cam, 0, T, cv.height); }
   // Gitter + Startspalte
   ctx.strokeStyle = '#ffffff22'; ctx.beginPath();
   for (let c = c0; c <= c1 + 1; c++) { const x = c * T - cam + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); }
@@ -109,8 +111,8 @@ function cellAt(e) {
 // Undo/Redo: Schnappschüsse des Grids (Zeilen mit \n verbunden)
 const undoSt = [], redoSt = [];
 const snap = () => rowsText().join('\n');
-function pushUndo(s) { undoSt.push(s); if (undoSt.length > 100) undoSt.shift(); redoSt.length = 0; }
-function restore(s) { grid = toGrid(s.split('\n')); ROWS = grid.length; COLS = grid[0].length; cam = Math.min(cam, maxCam()); }
+function pushUndo(s) { undoSt.push(s); if (undoSt.length > 100) undoSt.shift(); redoSt.length = 0; failCol = null; }
+function restore(s) { failCol = null; grid = toGrid(s.split('\n')); ROWS = grid.length; COLS = grid[0].length; cam = Math.min(cam, maxCam()); }
 function undo() { if (undoSt.length) { redoSt.push(snap()); restore(undoSt.pop()); say('Rückgängig.'); } }
 function redo() { if (redoSt.length) { undoSt.push(snap()); restore(redoSt.pop()); say('Wiederholt.'); } }
 addEventListener('keydown', e => {
@@ -195,6 +197,17 @@ document.getElementById('share').onclick = async () => {
   const url = new URL('index.html', location.href); url.hash = 'level=' + code;
   try { await navigator.clipboard.writeText(url.href); say('Link in die Zwischenablage kopiert.'); }
   catch { prompt('Link zum Level:', url.href); }
+};
+// Spielbarkeit: Bot (bot.js) spielt das Level durch, Abbruchspalte wird rot markiert
+const botText = r => r.won ? 'schaffbar' + (r.coins + r.missing.length ? ', Münzen erreichbar: ' + r.coins + '/' + (r.coins + r.missing.length) : '')
+  : 'nicht schaffbar, Abbruch bei Spalte ' + r.failCol + ' (' + r.pct + ' %)';
+function showFail(r) {
+  failCol = r && !r.won ? r.failCol : null;
+  if (failCol !== null) cam = Math.max(0, Math.min(maxCam(), failCol * T - cv.width / 2));
+}
+document.getElementById('check').onclick = () => {
+  say('Prüfe…');
+  setTimeout(() => { const r = checkLevel(grid); showFail(r); say('Level ' + botText(r) + '.'); }, 20);
 };
 document.getElementById('menu').onclick = () => { location.href = 'index.html'; };
 document.getElementById('export').onclick = async () => {
@@ -409,7 +422,9 @@ function generateLevel(diff, seed) {
   pushUndo(snap());
   grid = toGrid(rows); ROWS = grid.length; COLS = grid[0].length; cam = 0;
   const cnt = m => sections.filter(s => s.mode === m).length;
-  say('Level generiert: ' + n + ' Abschnitte (' + cnt('ship') + ' Schiff, ' + cnt('gravity') + ' Schwerkraft), ' + rows.patterns + ' Muster, Schwierigkeit ' + diff + ', Seed ' + seed + '.');
+  showFail(rows.check);
+  say('Level generiert: ' + n + ' Abschnitte (' + cnt('ship') + ' Schiff, ' + cnt('gravity') + ' Schwerkraft), ' + rows.patterns + ' Muster, Schwierigkeit ' + diff + ', Seed ' + seed + '.'
+    + (rows.check ? ' Bot: ' + botText(rows.check) + (rows.fixes ? ', ' + rows.fixes + ' Nachbesserungen' : '') + '.' : ''));
 }
 
 // BPM-Erkennung: Onset-Kurve (positive Energiesprünge) → Autokorrelation → Feinsuche von BPM und Phase (Offset)

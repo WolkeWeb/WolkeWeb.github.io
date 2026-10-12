@@ -10,7 +10,7 @@ const LEVELS = [[
   '############################################..########################',
 ], {
   // Rezept-Level: das Grid entsteht beim Laden aus Rezept + Mustern (patterns.js). offset in ms, speed (1–4) optional
-  name: 'Einstieg', music: 'audio/music.mp3', bpm: 120, offset: 0, seed: 11,
+  name: 'Einstieg', music: 'audio/music.mp3', bpm: 125, offset: 0, seed: 11,
   sections: [
     { mode: 'cube', bars: 4, difficulty: 1 }, { mode: 'cube', bars: 4, difficulty: 1 },
     { mode: 'cube', bars: 4, difficulty: 2 }, { mode: 'cube', bars: 4, difficulty: 2 },
@@ -20,7 +20,7 @@ const LEVELS = [[
     { mode: 'ship', bars: 4, difficulty: 2 }, { mode: 'cube', bars: 4, difficulty: 3 },
   ],
 }, {
-  name: 'Overdrive', music: 'audio/music.mp3', bpm: 120, offset: 0, seed: 77,
+  name: 'Overdrive', music: 'audio/music.mp3', bpm: 125, offset: 0, seed: 77,
   sections: [
     { mode: 'cube', bars: 4, difficulty: 2, speed: 1 }, { mode: 'gravity', bars: 3, difficulty: 2, speed: 1 },
     { mode: 'cube', bars: 2, difficulty: 3, speed: 2 }, { mode: 'ship', bars: 4, difficulty: 3, speed: 2 },

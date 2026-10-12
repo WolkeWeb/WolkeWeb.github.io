@@ -11,8 +11,6 @@ function setMap(m) {
 }
 setMap(levelGrid(LEVELS[0]));
 
-const WAVE_BOX = 20; // Hitbox der Welle (px)
-const SHIP_ACC = 0.5, SHIP_MAX = 6.5, SHIP_CEIL = 10; // Schiff: Beschleunigung, max. Vertikaltempo, Decke (Tiles über Boden)
 let p, held = false, state = 'menu', attempt = 1, timer = 0, parts = [];
 let pressed = false; // Eingabe wurde seit dem letzten Tick neu gedrückt
 let usedOrbs = new Set(); // bereits genutzte Orbs ("c,r") im aktuellen Versuch
@@ -40,14 +38,6 @@ const coinText = (key, total) => total ? '◎ ' + getCoins(key).length + '/' + t
 function saveCoins() {
   if (!bestKey || practice || !runCoins.size) return;
   try { localStorage.setItem('gdCoins.' + bestKey, JSON.stringify([...new Set([...getCoins(bestKey), ...runCoins])])); } catch {}
-}
-function collectCoins() {
-  const b = p.wave ? WAVE_BOX : T, o = (T - b) / 2, cx = p.x + o + b / 2, cy = p.y + o + b / 2;
-  for (let r = Math.floor((p.y + o) / T); r <= Math.floor((p.y + o + b - 1e-6) / T); r++)
-    for (let c = Math.floor((p.x + o) / T); c <= Math.floor((p.x + o + b - 1e-6) / T); c++) {
-      const i = tile(c, r) === '*' ? coinIdx.get(c + ',' + r) : undefined;
-      if (i !== undefined && Math.abs(cx - (c * T + T / 2)) < b / 2 + 14 && Math.abs(cy - (r * T + T / 2)) < b / 2 + 14) runCoins.add(i);
-    }
 }
 // Kleine Hinweis-Einblendung (unten mittig)
 let toastMsg = '', toastUntil = 0;
@@ -125,7 +115,7 @@ function reset() {
   else {
     if (endless) endlessInit();
     runTicks = 0;
-    p = { x: startX, y: (ROWS - 2) * T, vy: 0, ground: true, rot: 0, target: 0, ship: false, grav: startGrav(), spd: speedAtX(map, startX) };
+    p = { x: startX, y: (ROWS - 2) * T, vy: 0, ground: true, rot: 0, target: 0, ship: false, grav: gravAt(world, startX), spd: speedAtX(map, startX) };
     usedOrbs = new Set(); runCoins = new Set();
   }
   state = 'play'; parts = []; pressed = false; newRecord = false;
@@ -144,18 +134,11 @@ function die() {
   }
 }
 
-// AABB-Test gegen alle Tiles des Typs ch; spike nutzt verkleinerte Hitbox, die Welle eine kleinere Spieler-Box
-function hits(ch) {
-  const inset = ch === '^' ? [12, 14, 12, 0] : ch === 'o' ? [0, 30, 0, 0] : [0, 0, 0, 0]; // l, t, r, b
-  const sz = p.wave ? WAVE_BOX : T, o = (T - sz) / 2, px = p.x + o, py = p.y + o;
-  for (let r = Math.floor(py / T); r <= Math.floor((py + sz - 1e-6) / T); r++)
-    for (let c = Math.floor(px / T); c <= Math.floor((px + sz - 1e-6) / T); c++) {
-      if (tile(c, r) !== ch) continue;
-      const l = c * T + inset[0], t = r * T + inset[1], rr = (c + 1) * T - inset[2], bt = (r + 1) * T - inset[3];
-      if (px < rr && px + sz > l && py < bt && py + sz > t) return true;
-    }
-  return false;
-}
+// Sicht auf das aktuelle Level für step() (bot.js)
+const world = {
+  tile, colHas: (c, ch) => { for (let r = 0; r < ROWS; r++) if (tile(c, r) === ch) return true; return false; },
+  get ROWS() { return ROWS; }, get COLS() { return COLS; }, get coinIdx() { return coinIdx; },
+};
 
 // Icons: 8 Farben + 4 Gesichter; need = Münzen (Summe über alle Levels), ab denen freigeschaltet
 const ICON_COLORS = ['#ffd400', '#ff4f4f', '#4fe86f', '#4fe8ff', '#b84fff', '#ff9a3d', '#ff4fd8', '#ffffff'], COLOR_NEED = [0, 0, 0, 0, 1, 1, 2, 3];
@@ -199,7 +182,7 @@ function startLevel(m, x, key, name) { // x: optionale Start-x-Position (Musikze
 }
 // Endlos: Level wächst in Abschnitten (buildLevel), alte Spalten fallen weg. Tempo +1 Stufe je ~30 s, Schwierigkeit steigt mit.
 // Abschnitte haben gerade Taktzahlen und liegen exakt aneinander, so bleibt die Musik im Takt.
-const ENDLESS = { music: 'audio/music.mp3', bpm: 120, offset: 0 };
+const ENDLESS = { music: 'audio/music.mp3', bpm: 125, offset: 0 };
 let endless = null; // { seed, idx (Abschnittszähler), t (geplante Zeit am Abschnittsanfang, s), wx (Welt-x am Abschnittsanfang) }
 function endlessInit() {
   const t0 = recipeStart(ENDLESS.bpm, ENDLESS.offset);
@@ -222,7 +205,7 @@ function endlessChunk() {
   };
   add(mode, 4);
   if (mode !== 'cube') add('cube', 2); // zurück auf Würfel, damit Abschnitte ohne Portal-Konflikt aneinanderpassen
-  const rows = buildLevel({ bpm: ENDLESS.bpm, offset: ENDLESS.offset, seed, sections, coins: false });
+  const rows = buildLevel({ bpm: ENDLESS.bpm, offset: ENDLESS.offset, seed, sections, coins: false, check: false }); // keine Bot-Prüfung: würde mitten im Lauf ruckeln
   const n = Math.round((e.wx + len) / T) - Math.round(e.wx / T), from = e.idx ? rows.c0 : 0;
   for (let r = 0; r < map.length; r++) map[r] += rows[r].slice(from, rows.c0 + n);
   e.idx++; e.t = t; e.wx += len;
@@ -247,7 +230,7 @@ function dailyLevel() {
   const rnd = mulberry32(key), pool = ['cube', 'cube', 'ship', 'gravity', 'wave'], sections = [];
   for (let i = 0; i < 12; i++) sections.push({ mode: i ? pool[Math.floor(rnd() * pool.length)] : 'cube', bars: 3 + Math.floor(rnd() * 2), difficulty: 2 + Math.floor(rnd() * 3), speed: i < 5 ? 1 : 2 });
   const pad = n => String(n).padStart(2, '0');
-  return dailyRec = { key, name: 'Tageslevel ' + pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(), music: 'audio/music.mp3', bpm: 120, offset: 0, seed: key, sections };
+  return dailyRec = { key, name: 'Tageslevel ' + pad(d.getDate()) + '.' + pad(d.getMonth() + 1) + '.' + d.getFullYear(), music: 'audio/music.mp3', bpm: 125, offset: 0, seed: key, sections };
 }
 function startDaily() { const r = dailyLevel(); startLevel(r, undefined, 'D' + r.key, r.name); }
 function goMenu() {
@@ -332,79 +315,9 @@ function drawMenu() {
   drawToast();
 }
 
-// Portal-Spalte durchflogen? ch = 'S' (Schiff) oder 'C' (Würfel); gilt für die ganze Spalte
-function inPortal(ch) {
-  for (let c = Math.floor(p.x / T); c <= Math.floor((p.x + T - 1e-6) / T); c++)
-    for (let r = 0; r < ROWS; r++) if (tile(c, r) === ch) return true;
-  return false;
-}
-// Schwerkraft/Tempo am Start: alle Portale, die der Startposition vorausliegen
-function startGrav() {
-  let g = 1;
-  for (let c = 0; c * T - T < startX; c++) {
-    let u = false, n = false;
-    for (let r = 0; r < ROWS; r++) { const ch = tile(c, r); if (ch === 'U') u = true; else if (ch === 'N') n = true; }
-    if (n) g = 1;
-    if (u) g = -1;
-  }
-  return g;
-}
-function flipGrav(g) { p.grav = g; p.ground = false; if (!p.ship) p.vy = 0; }
-function applyPortals() { // U/N: Schwerkraft, 1–4 (> / <): Tempo (gilt für Würfel und Schiff)
-  let lv = 0;
-  for (const ch in SPEED_CH) if (SPEED_CH[ch] > lv && inPortal(ch)) lv = SPEED_CH[ch];
-  if (lv) p.spd = SPEEDS[lv - 1];
-  if (lv && lv !== p.inSpd) flash = { col: PORTALS[String(lv)][0], t: performance.now() }; // Blitz beim Durchfliegen
-  p.inSpd = lv;
-  if (inPortal('N') && p.grav < 0) flipGrav(1);
-  if (inPortal('U') && p.grav > 0) flipGrav(-1);
-}
-// Schiff: Eingabe = steigen, sonst sinken; Boden/Blöcke von oben und unten sind sicher, seitlich tödlich
-function updateShip() {
-  const thrust = held && !inputLocked;
-  p.vy = Math.max(-SHIP_MAX, Math.min(SHIP_MAX, p.vy + (thrust ? -SHIP_ACC : SHIP_ACC) * p.grav));
-  p.y += p.vy; p.ground = false;
-  if (hits('#')) {
-    p.y = p.vy > 0 ? Math.floor((p.y + T) / T) * T - T : (Math.floor(p.y / T) + 1) * T;
-    p.vy = 0;
-  }
-  const top = (ROWS - 1 - SHIP_CEIL) * T;
-  if (p.y < top) { p.y = top; p.vy = 0; }
-  p.rot += (Math.atan2(p.vy, SPEED * p.spd) - p.rot) * 0.2; p.target = p.rot;
-  p.x += SPEED * p.spd; // Y liegt jetzt bündig → jede Blockberührung ist seitlich
-  if (hits('|')) { win(); return; }
-  if (hits('#') || hits('^')) return die();
-  collectCoins();
-  if (inPortal('W')) { enterWave(); return; }
-  if (inPortal('C')) { p.ship = false; p.rot = p.target = 0; }
-  applyPortals();
-  if (p.x > COLS * T) { cp = null; reset(); }
-}
-
-// Welle: Eingabe gehalten = 45° nach oben, sonst 45° nach unten; jede Berührung von Block oder Spike tötet (Decke begrenzt nur)
-function enterWave() {
-  p.wave = true; p.ship = false; p.trail = []; p.grace = p.ground ? 12 : 0; p.ground = false; p.vy = 0; // grace: kurzer Steigflug, wenn vom Boden aus eingetreten
-}
-function updateWave() {
-  const v = SPEED * p.spd, up = p.grace > 0 || (held && !inputLocked);
-  if (p.grace > 0) p.grace--;
-  p.vy = up ? -v : v;
-  p.x += v; p.y += p.vy; p.ground = false;
-  const top = (ROWS - 1 - SHIP_CEIL) * T;
-  if (p.y < top) p.y = top;
-  p.rot = p.target = up ? -Math.PI / 4 : Math.PI / 4;
-  if (hits('|')) { win(); return; }
-  if (hits('#') || hits('^') || p.y > ROWS * T) return die();
-  p.trail.push({ x: p.x + T / 2, y: p.y + T / 2 }); if (p.trail.length > 90) p.trail.shift();
-  collectCoins();
-  if (inPortal('C')) { p.wave = false; p.vy = 0; p.rot = p.target = 0; }
-  else if (inPortal('S')) { p.wave = false; p.ship = true; p.vy = 0; }
-  applyPortals();
-  if (p.x > COLS * T) { cp = null; reset(); }
-}
-
+// Ein Physik-Tick: step() aus bot.js (dieselbe Simulation wie der Spielbarkeits-Bot), danach Spiel-Ereignisse und Effekte
 function update() {
-  if (inMenu() || state === 'won') return;
+  if (inMenu() || state === 'won' || state === 'paused') return;
   if (state === 'dead') {
     for (const q of parts) { q.x += q.vx; q.y += q.vy; q.vy += 0.3; }
     if (--timer <= 0) { attempt++; reset(); }
@@ -412,42 +325,15 @@ function update() {
   }
   if (endless) endlessTick();
   runTicks++;
-  if (p.wave) { pressed = false; return updateWave(); }
-  if (p.ship) { pressed = false; return updateShip(); }
-  if (held && !inputLocked && p.ground) { p.vy = JUMP * p.grav; p.ground = false; p.target += p.grav * Math.PI / 2; }
-  else if (pressed && !inputLocked && !p.ground) { // Orb: nur bei neuem Tastendruck, einmal pro Versuch
-    for (let r = Math.floor(p.y / T); r <= Math.floor((p.y + T - 1e-6) / T); r++)
-      for (let c = Math.floor(p.x / T); c <= Math.floor((p.x + T - 1e-6) / T); c++) {
-        const k = c + ',' + r;
-        if (tile(c, r) !== 'O' || usedOrbs.has(k)) continue;
-        const ox = c * T + T / 2, oy = r * T + T / 2;
-        if (Math.abs(p.x + T / 2 - ox) < T / 2 + 12 && Math.abs(p.y + T / 2 - oy) < T / 2 + 12 && !usedOrbs.has(k)) {
-          usedOrbs.add(k); p.vy = JUMP * p.grav; p.target += p.grav * Math.PI / 2;
-        }
-      }
-  }
-  pressed = false;
-  if (hits('o')) { p.vy = JUMP * PAD_MULT * p.grav; p.ground = false; p.target += p.grav * Math.PI / 2; } // Jump-Pad
-  // X: jede Blockberührung hier ist seitlich (Y ist noch sauber auf Oberkante) → Tod
-  p.x += SPEED * p.spd;
-  if (hits('|')) { win(); return; }
-  if (hits('#') || hits('^')) return die();
-  applyPortals();
-  if (inPortal('W')) { enterWave(); return; }
-  if (inPortal('S')) { p.ship = true; p.ground = false; p.vy = Math.max(-SHIP_MAX, Math.min(SHIP_MAX, p.vy)); }
-  // Y: fallend landen, steigend gegen Decke = Tod
-  p.vy += GRAV * p.grav; p.y += p.vy; p.ground = false;
-  const top = (ROWS - 1 - SHIP_CEIL) * T;
-  if (p.grav < 0 && p.y < top) { p.y = top; p.vy = 0; p.ground = true; p.rot = p.target; } // obere Grenze = Boden bei umgekehrter Schwerkraft
-  if (hits('#')) {
-    if (p.vy * p.grav < 0) return die();
-    p.y = p.grav > 0 ? Math.floor((p.y + T) / T) * T - T : (Math.floor(p.y / T) + 1) * T; // auf Standfläche setzen
-    p.vy = 0; p.ground = true; p.rot = p.target;
-  }
-  if (hits('^') || (p.grav > 0 && p.y > ROWS * T)) return die();
-  if (!p.ground) p.rot += (p.target - p.rot) * 0.12;
-  collectCoins();
-  if (p.x > COLS * T) { cp = null; reset(); } // Ziel erreicht → von vorn
+  const inSpd = p.inSpd, wasWave = p.wave;
+  p.orbs = usedOrbs; p.coins = runCoins;
+  const ev = step(p, held && !inputLocked, pressed && !inputLocked, world);
+  pressed = false; usedOrbs = p.orbs; runCoins = p.coins;
+  if (p.inSpd && p.inSpd !== inSpd) flash = { col: PORTALS[String(p.inSpd)][0], t: performance.now() }; // Blitz beim Durchfliegen
+  if (ev === 'win') win();
+  else if (ev === 'die') die();
+  else if (ev === 'end') { cp = null; reset(); } // Levelende ohne Ziel → von vorn
+  else if (wasWave) { p.trail.push({ x: p.x + T / 2, y: p.y + T / 2 }); if (p.trail.length > 90) p.trail.shift(); }
 }
 
 let wonAt = 0;
@@ -618,6 +504,11 @@ function draw() {
     ctx.fillText('Neuer Rekord! ' + (endless ? fmtSec(deathSec) : progressPct() + '%'), cv.width / 2, 130);
   }
   drawButtons(hudButtons());
+  if (state === 'paused') {
+    ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.font = '40px sans-serif'; ctx.fillText('Pause', cv.width / 2, 140);
+    drawButtons(pauseButtons());
+  }
   ctx.textAlign = 'left';
   if (state === 'won') {
     ctx.fillStyle = '#000a'; ctx.fillRect(0, 0, cv.width, cv.height);
@@ -649,7 +540,7 @@ function hudButtons() {
 function hudClick(e) {
   const r = cv.getBoundingClientRect();
   const x = (e.clientX - r.left) * cv.width / r.width, y = (e.clientY - r.top) * cv.height / r.height;
-  const b = [...hudButtons(), ...(state === 'won' ? winButtons() : [])].find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+  const b = [...hudButtons(), ...(state === 'won' ? winButtons() : []), ...(state === 'paused' ? pauseButtons() : [])].find(b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
   if (b) b.fn();
   return !!b;
 }
@@ -659,6 +550,7 @@ const set = v => e => {
   if (v) unlockAudio();
   if (inMenu()) { if (v && !e.code) menuClick(e); e.preventDefault(); return; }
   if (v && !e.code && hudClick(e)) { e.preventDefault(); return; }
+  if (v && state === 'paused') { e.preventDefault(); return; } // Pause: nur die Buttons
   const id = e.code ? 'key' : 'ptr' + e.pointerId;
   if (v && !down.has(id)) pressed = true;
   v ? down.add(id) : down.delete(id);
@@ -677,15 +569,41 @@ addEventListener('keydown', e => { // M: alles stumm/an
 });
 addEventListener('keydown', e => { if (e.code === 'KeyZ' && !e.repeat) setCheckpoint(); }); // Z: Checkpoint (Übungsmodus)
 addEventListener('keydown', e => { if (e.code === 'KeyC' && !e.repeat && state === 'won') copyResult(); }); // C: Ergebnis kopieren
+addEventListener('keydown', e => { if (e.code === 'KeyP' && !e.repeat) state === 'paused' ? resumeGame() : pauseGame(); }); // P: Pause
+document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
 addEventListener('keydown', set(true)); addEventListener('keyup', set(false));
 cv.addEventListener('pointerdown', set(true)); addEventListener('pointerup', set(false)); addEventListener('pointercancel', set(false));
 cv.addEventListener('contextmenu', e => e.preventDefault());
 
-// Fester Timestep 60 Hz
-let last = performance.now(), acc = 0;
+// Pause (P / Tab-Wechsel): Overlay Weiter / Neustart / Menü
+const musicPos = () => endless ? runSec() : timeAtX(map, p.x); // Soll-Musikzeit (s) zur Spielerposition
+function syncMusic(force) { // Musik auf die Spielerposition setzen (ohne force nur bei > 50 ms Abweichung)
+  let t = Math.max(0, musicPos());
+  if (music.duration > 0) t %= music.duration;
+  if (force || Math.abs(music.currentTime - t) > 0.05) music.currentTime = t;
+  lastSync = performance.now();
+}
+function pauseGame() {
+  if (state !== 'play') return;
+  state = 'paused'; music.pause(); down.clear(); held = false; pressed = false;
+}
+function resumeGame() {
+  if (state !== 'paused') return;
+  state = 'play'; acc = 0; last = performance.now(); inputLocked = down.size > 0;
+  if (audioOn && !practice) { syncMusic(true); music.play().catch(() => {}); }
+}
+const pauseButtons = () => [
+  { label: 'Weiter', x: 290, y: 170, w: 220, h: 40, fn: resumeGame },
+  { label: 'Neustart', x: 290, y: 220, w: 220, h: 40, fn: () => { attempt++; cp = null; acc = 0; last = performance.now(); reset(); } },
+  { label: 'Menü', x: 290, y: 270, w: 220, h: 40, fn: goMenu },
+];
+
+// Fester Timestep 60 Hz; alle 2 s Musik nachjustieren
+let last = performance.now(), acc = 0, lastSync = 0;
 function loop(now) {
   acc += Math.min(now - last, 250); last = now;
   while (acc >= DT) { update(); acc -= DT; }
+  if (state === 'play' && audioOn && !practice && !music.paused && performance.now() - lastSync >= 2000) syncMusic();
   draw(); requestAnimationFrame(loop);
 }
 goMenu();

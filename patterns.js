@@ -357,18 +357,65 @@ function runway(prev, s) { // freie Spalten hinter dem Portal, damit der Spieler
   return s.lvl !== prev.lvl ? cols(airTicks(0, JUMP) * v) + 1 : 0; // Tempowechsel im Sprung verlängert die Flugbahn
 }
 
-// MAX_COINS Münzen: je eine pro Drittel des Levels (Mindestabstand 8 Spalten), danach aus dem Rest auffüllen
-function placeCoins(g, cands, rnd) {
-  const ok = cands.filter(q => g[q.r]?.[q.c] === '.');
-  if (!ok.length) return;
-  const lo = Math.min(...ok.map(q => q.c)), span = (Math.max(...ok.map(q => q.c)) - lo + 1) / MAX_COINS, chosen = [];
+// MAX_COINS Münzen: je eine pro Drittel des Levels (Mindestabstand 8 Spalten), danach aus dem Rest auffüllen.
+// keep = bereits gesetzte Münzen (bleiben, ihr Drittel gilt als belegt). Rückgabe: alle gesetzten Münzen
+function placeCoins(g, cands, rnd, keep = []) {
+  const ok = cands.filter(q => !q.bad && g[q.r]?.[q.c] === '.'), all = keep.concat(ok);
+  if (!ok.length) return keep;
+  const lo = Math.min(...all.map(q => q.c)), span = (Math.max(...all.map(q => q.c)) - lo + 1) / MAX_COINS, chosen = [...keep];
   const free = q => chosen.every(o => Math.abs(o.c - q.c) >= 8), pick = l => l[Math.floor(rnd() * l.length)];
-  for (let z = 0; z < MAX_COINS; z++) {
-    const zone = ok.filter(q => q.c >= lo + z * span && q.c < lo + (z + 1) * span && free(q));
+  const inZone = (q, z) => q.c >= lo + z * span && q.c < lo + (z + 1) * span;
+  for (let z = 0; z < MAX_COINS && chosen.length < MAX_COINS; z++) {
+    if (chosen.some(q => inZone(q, z))) continue;
+    const zone = ok.filter(q => inZone(q, z) && free(q));
     if (zone.length) chosen.push(pick(zone));
   }
   for (let rest; chosen.length < MAX_COINS && (rest = ok.filter(q => !chosen.includes(q) && free(q))).length;) chosen.push(pick(rest));
   for (const q of chosen) g[q.r][q.c] = '*';
+  return chosen;
+}
+
+// Spielbarkeit per Bot (checkLevel, bot.js), max. MAX_FIX Nachbesserungen:
+// Fehlschlag → Muster um failCol neu erzeugen (anderer Seed, ab dem 2. Versuch leichter, ab dem 5. leer, danach das Muster davor);
+// unerreichbare Münzen → an eine andere Kandidatenstelle setzen. Erneute Prüfung setzt beim letzten Zwischenstand vor der Änderung auf.
+const MAX_FIX = 20;
+function verifyLevel(g, rec, pats, cands, coins, rnd) {
+  const snaps = [], seed = Math.floor(rec.seed) || 0;
+  let res = checkLevel(g, { snaps }), fixes = 0;
+  while (fixes < MAX_FIX && !(res.won && !res.missing.length)) {
+    const before = coins;
+    let from = Infinity;
+    if (!res.won) {
+      const P = pats.filter(q => q.id && q.c <= res.failCol + 1 && res.failCol < q.c + q.w + 10).pop();
+      if (!P) break;
+      from = P.c;
+      coins = coins.filter(q => { const hit = q.c >= P.c && q.c < P.c + P.w; if (hit) g[q.r][q.c] = '.'; return !hit; });
+      P.B.undo();
+      const old = new Set(P.B.cands);
+      for (let i = cands.length - 1; i >= 0; i--) if (old.has(cands[i])) cands.splice(i, 1);
+      P.tries++; P.id = '';
+      const d = Math.max(1, P.s.d - (P.tries >> 1)), r2 = mulberry32(seed + 7919 * (fixes + 1) + P.c);
+      const pool = P.tries < 5 ? PATTERNS.filter(p => p.mode === P.s.mode && p.diff <= d) : [];
+      while (pool.length && !P.id) {
+        const p = pool.splice(Math.floor(r2() * pool.length), 1)[0], B = mkB(g, P.c, P.s.spd, P.s.mode === 'gravity', r2, P.w, d), w = p.build(B);
+        if (w > 0 && w <= P.w) { P.id = p.id; P.B = B; cands.push(...B.cands); }
+        else B.undo();
+      }
+      if (!P.id) P.c = -Infinity; // leer: nicht erneut wählen
+    } else {
+      for (const m of res.missing) {
+        const q = coins.find(o => o.c === m.c && o.r === m.r);
+        if (q) { q.bad = true; g[q.r][q.c] = '.'; from = Math.min(from, q.c); }
+      }
+      if (from === Infinity) break;
+      coins = coins.filter(q => !q.bad);
+    }
+    if (rec.coins !== false && coins.length < before.length) coins = placeCoins(g, cands, rnd, coins);
+    for (const q of coins) if (!before.includes(q)) from = Math.min(from, q.c);
+    fixes++;
+    res = checkLevel(g, { snaps, from });
+  }
+  return { res, fixes };
 }
 
 function buildLevel(rec) {
@@ -392,7 +439,7 @@ function buildLevel(rec) {
   if (last.mode === 'gravity') g[3][last.end] = 'N';
 
   let nPat = 0;
-  const cands = []; // mögliche Münzstellen aller Muster
+  const cands = [], pats = []; // mögliche Münzstellen und gesetzte Muster ({ c, w, s, B, id, tries })
   secs.forEach((s, i) => {
     const prev = i ? secs[i - 1] : { mode: 'cube', lvl: 1 };
     if (shape(s.mode) !== shape(prev.mode)) g[4][s.cp] = { ship: 'S', wave: 'W', cube: 'C' }[shape(s.mode)];
@@ -414,7 +461,7 @@ function buildLevel(rec) {
         while (k < pool.length - 1 && (r -= wt[k]) >= 0) k++;
         const p = pool.splice(k, 1)[0], B = mkB(g, cs, s.spd, up, rnd, lim - cs, s.d);
         w = p.build(B);
-        if (w > 0 && cs + w <= lim) { lastId = p.id; nPat++; cands.push(...B.cands); }
+        if (w > 0 && cs + w <= lim) { lastId = p.id; nPat++; cands.push(...B.cands); pats.push({ c: cs, w, s, B, id: p.id, tries: 0 }); }
         else { B.undo(); w = 0; }
       }
       if (!w) break;
@@ -422,9 +469,10 @@ function buildLevel(rec) {
     }
   });
 
-  if (rec.coins !== false) placeCoins(g, cands, rnd);
+  const coins = rec.coins !== false ? placeCoins(g, cands, rnd) : [];
+  const chk = rec.check !== false && typeof checkLevel === 'function' ? verifyLevel(g, rec, pats, cands, coins, rnd) : null; // check: false = ohne Bot-Prüfung
   const rows = g.map(r => r.join(''));
-  Object.assign(rows, { name: rec.name, music: rec.music, bpm, offset: rec.offset || 0, patterns: nPat, c0: secs.length ? secs[0].cp : START_COL }); // c0 = Portalspalte des ersten Abschnitts
+  Object.assign(rows, { name: rec.name, music: rec.music, bpm, offset: rec.offset || 0, patterns: nPat, check: chk?.res, fixes: chk?.fixes || 0, c0: secs.length ? secs[0].cp : START_COL }); // c0 = Portalspalte des ersten Abschnitts
   return rows;
 }
 
