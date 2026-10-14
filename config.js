@@ -4,6 +4,17 @@ const CANVAS_W = 800, CANVAS_H = 400;
 const LEVEL_COLS = 70, LEVEL_ROWS = 10; // Standardgröße eines Levels (siehe levels.js)
 const START_COL = 3; // Spieler startet in dieser Spalte, eine Zeile über dem Boden
 const CUSTOM_KEY = 'customLevel'; // localStorage: Level als JSON-Array von Zeilen-Strings
+// Eigene Musik (Datei aus dem Editor) liegt in IndexedDB 'gd' / Store 'files' / Key 'customMusic' (zu groß für localStorage)
+function musicDb(mode, fn) {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open('gd', 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('files');
+    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => { const r = fn(rq.result.transaction('files', mode).objectStore('files')); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); };
+  });
+}
+const getCustomMusic = () => musicDb('readonly', s => s.get('customMusic')).catch(() => null); // Blob/File oder null
+const setCustomMusic = f => musicDb('readwrite', s => f ? s.put(f, 'customMusic') : s.delete('customMusic'));
 const TILE_TYPES = { '.': 'Leer', '#': 'Block', '^': 'Spike', 'o': 'Jump-Pad', 'O': 'Orb', '|': 'Ziel', '*': 'Münze' };
 const MAX_COINS = 3; // Münzen pro Level (Tile *)
 

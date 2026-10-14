@@ -287,9 +287,13 @@ addEventListener('keydown', e => {
 
 document.getElementById('music').addEventListener('change', e => {
   const f = e.target.files[0];
-  if (f) loadAudio(() => f.arrayBuffer(), f.name);
+  if (!f) return;
+  loadAudio(() => f.arrayBuffer(), f.name);
+  setCustomMusic(f).then(() => say('Musik für eigenes Level gespeichert: ' + f.name), () => say('Musik konnte nicht gespeichert werden.'));
 });
-loadAudio(() => fetch('audio/music.mp3').then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }), 'audio/music.mp3');
+getCustomMusic().then(f => f
+  ? (player.src = URL.createObjectURL(f), loadAudio(() => f.arrayBuffer(), f.name || 'eigene Musik'))
+  : loadAudio(() => fetch('audio/music.mp3').then(r => { if (!r.ok) throw 0; return r.arrayBuffer(); }), 'audio/music.mp3'));
 
 // Peak je Welt-Pixel (Zeitbereich je Pixel aus timeAtX), damit das Zeichnen pro Frame billig bleibt
 function buildPeaks() {
