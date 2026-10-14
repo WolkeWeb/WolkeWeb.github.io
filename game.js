@@ -173,9 +173,12 @@ function loadCustom() { // gültiges Level aus localStorage oder null
     return Array.isArray(v) && v.length >= 2 && v.every(r => typeof r === 'string') ? v : null;
   } catch { return null; }
 }
-function startLevel(m, x, key, name) { // x: optionale Start-x-Position (Musikzeit = timeAtX); m: Grid oder Rezept (levels.js)
+// Eigene Musik aus dem Editor (IndexedDB) als Blob-URL, für das eigene Level
+let customTrack = null;
+const customTrackReady = getCustomMusic().then(f => customTrack = f ? URL.createObjectURL(f) : null);
+function startLevel(m, x, key, name, track) { // x: optionale Start-x-Position (Musikzeit = timeAtX); m: Grid oder Rezept (levels.js); track: optionale Musik-URL
   m = levelGrid(m); endless = null; levelName = name || m.name || 'Level';
-  const track = m.music || 'audio/music.mp3';
+  track = track || m.music || 'audio/music.mp3';
   if (!music.src.endsWith(track)) music.src = track;
   startX = x ?? START_COL * T; startT = Math.max(0, timeAtX(m, startX));
   setMap(m); attempt = 1; cp = null; bestKey = key || null; savedCoins = new Set(bestKey ? getCoins(bestKey) : []); reset();
@@ -243,7 +246,7 @@ function goMenu() {
     { label: 'Tageslevel', sub: [bestText('D' + daily.key), coinText('D' + daily.key, levelCoins(daily))].filter(Boolean).join('   '), fn: startDaily },
     { label: 'Editor', fn: () => { location.href = 'editor.html'; } },
   ];
-  if (custom) items.push({ label: 'Eigenes Level', sub: [bestText('custom'), coinText('custom', levelCoins(custom))].filter(Boolean).join('   '), fn: () => startLevel(custom, undefined, 'custom', 'Eigenes Level') });
+  if (custom) items.push({ label: 'Eigenes Level', sub: [bestText('custom'), coinText('custom', levelCoins(custom))].filter(Boolean).join('   '), fn: () => startLevel(custom, undefined, 'custom', 'Eigenes Level', customTrack) });
   items.push({ label: 'Übungsmodus: ' + (practice ? 'An' : 'Aus'), fn: () => { practice = !practice; goMenu(); } });
   buttons = items.map((b, i) => ({ ...b, x: bx + (i % 2) * (bw + gap), y: 105 + Math.floor(i / 2) * 50, w: bw, h: 42 }));
   if (items.length % 2) buttons[items.length - 1].x = (cv.width - bw) / 2;
@@ -608,7 +611,7 @@ function loop(now) {
 }
 goMenu();
 const th = location.hash.match(/^#test(?:@(\d+))?$/);
-if (th) { const c = loadCustom(); if (c) startLevel(c, th[1] ? +th[1] : undefined); } // Teststart aus dem Editor
+if (th) { const c = loadCustom(); if (c) customTrackReady.then(() => startLevel(c, th[1] ? +th[1] : undefined, undefined, undefined, customTrack)); } // Teststart aus dem Editor
 // Geteiltes Level: index.html#level=<z|r><base64url> (z = deflate-raw, r = unkomprimiert)
 async function unpackLevel(code) {
   try {
